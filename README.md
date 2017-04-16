@@ -1,0 +1,2 @@
+# aim
+Auto Install MySQL
