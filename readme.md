@@ -63,7 +63,7 @@ LOGDIR=${PRE_LOGDIR}/log_${PORT}
  ```
 配置说明：
 ===
-## aim.sh 软件包 https://github.com/aimdotsh/aim.git
+## aim.sh 软件包  https://github.com/aimdotsh/aim
 搭建主库
 ===
 
