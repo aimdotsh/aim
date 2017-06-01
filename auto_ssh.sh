@@ -1,7 +1,7 @@
 #!/bin/sh
 USER=root
-PASSWD=1qaz@WSX
-HOST=10.3.220.14
+PASSWD=root
+HOST=10.8.8.8
 if [ ! -f "/root/.ssh/id_rsa.pub" ]; then
   ssh-keygen -t rsa -P '' -f /root/.ssh/id_rsa
 fi
