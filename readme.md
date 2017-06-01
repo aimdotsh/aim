@@ -4,7 +4,7 @@
 
 ```
 ##配置说明：
-## aim软件包 https://github.com/aimdotsh/aim.git
+## aim.sh 软件包 https://github.com/aimdotsh/aim.git
 ##搭建主库
 
 ```
@@ -15,8 +15,8 @@ cd aim
 chmod +x *.sh
 ./aim.sh  
 #之后自动安装，脚本会检测是否存在/data和/log，如果不存在，安装会退出。
-#默认安装的MySQL版本为 MySQL 5.6.31，如果要安装其他版本如 MySQL 5.6.34，请执行：
-./aim.sh 34
+#默认安装的MySQL版本为 MySQL 5.7.18，如果要安装其他版本如 MySQL 5.6.34，请执行：
+./aim.sh 5.6.34
 ```
 ##搭建从库
 ```
@@ -34,7 +34,7 @@ vi aim.sh
 #安装Slave
 ./aim.sh 
 #同样默认安装的是MySQL5.6.31版本，如果安装其它版本请执行：
-./aim.sh 34
+./aim.sh 5.6.34
 ```
 ##删除aim.sh搭建的数据库
 ```
