@@ -1,0 +1,26 @@
+PORT=$1
+if [ ! $PORT ]
+then PORT=57180
+fi
+
+ver=$2
+if [ ! $ver ]
+then ver=5.7.18
+fi
+verdir=$(echo $ver|awk -F"." '{print $1"."$2}')
+verif7=$(echo $ver|awk -F"." '{print $2}')
+slave=0
+masterip=10.3.112.15
+slaveip=10.19.100.6
+ssl_user=root
+ssl_passwd=redhat
+PRE_BASEDIR=/data/mysql
+PRE_LOGDIR=/log/mysql_log
+PRE_DATADIR=/data/mysql_data
+BASEDIR=$PRE_BASEDIR/mysql${verdir}
+DATADIR=${PRE_DATADIR}/data_${PORT}
+MYSQL_DATADIR=$DATADIR
+MYSQL_HOME=$BASEDIR
+TMPDIR=${PRE_DATADIR}/tmp_${PORT}
+LOGDIR=${PRE_LOGDIR}/log_${PORT}
+MySQL_Pass=aim.sh

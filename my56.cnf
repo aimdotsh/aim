@@ -1,0 +1,70 @@
+[client]
+port   	=      	3306
+socket 	=      	/data/mysql_data/data/mysql.sock
+[mysql]
+prompt="\u@\h\p \R:\m:\s [\d]> "
+[mysqld]
+basedir = /data/mysql/mysql5.6
+datadir	= /data/mysql_data/data
+open_files_limit = 61230
+server_id = 339901
+autocommit    	=      	1
+back_log       	=      	128
+binlog_cache_size      	=      	2M
+binlog_format  	=      	row
+character_set_server   	=      	utf8
+default-storage-engine 	=      	InnoDB
+expire_logs_days       	=      	7
+innodb_buffer_pool_size	=      	466632K
+innodb_data_file_path  	=      	ibdata1:20M;ibdata2:50M:autoextend
+innodb_file_per_table  	=      	1
+innodb_flush_log_at_trx_commit 	=      	1
+innodb_flush_method    	=      	O_DIRECT
+innodb_lock_wait_timeout       	=      	50
+innodb_log_buffer_size 	=      	8M
+innodb_log_file_size   	=      	256M
+innodb_log_files_in_group      	=      	4
+innodb_log_group_home_dir      	=      	/log/mysql_log/innodb_log
+innodb_max_dirty_pages_pct     	=      	75
+innodb_stats_on_metadata       	=      	OFF
+interactive_timeout    	=      	86400
+key_buffer_size	=      	32M
+log-bin = /log/mysql_log/bin_log/mysql-bin
+log_error=/log/mysql_log/mysql.err
+long_query_time	=      	1
+lower_case_table_names 	=      	1
+max_allowed_packet     	=      	32M
+max_connect_errors     	=      	1000000000
+max_connections	=      	1024
+max_user_connections   	=      	0
+myisam_sort_buffer_size	=      	8M
+net_buffer_length      	=      	16K
+pid_file       	=      	/data/mysql_data/data/mysql.pid
+port   	=      	3306
+query_cache_size       	=      	0
+query_cache_type       	=      	0
+read_buffer_size       	=      	128K
+read_rnd_buffer_size   	=      	256K
+relay-log      	=      	/log/mysql_log/relay_log/relay-bin
+#read-only=1
+skip-external-locking
+skip-name-resolve
+slave_load_tmpdir      	=      	/data/mysql_data/tmp
+slow-query-log
+slow_query_log_file    	=      	/log/mysql_log/slow_queries.log
+slow_launch_time       	= 1
+socket 	=      	/data/mysql_data/data/mysql.sock
+sort_buffer_size       	=      	2M
+sync_binlog    	=      	1
+#sync_relay_log = 1
+relay-log-info-repository = TABLE
+master-info-repository = TABLE
+table_open_cache       	=      	1024
+tmpdir 	=      	/data/mysql_data/tmp
+thread_cache_size      	=      	1024
+transaction-isolation  	=      	READ-COMMITTED
+wait_timeout   	=      	86400
+explicit_defaults_for_timestamp=true
+[mysql]
+no-auto-rehash
+default-character-set  	=      	utf8
