@@ -1,6 +1,6 @@
-aim.sh 自动安装 mysql-5.6.29/31/34 二进制版本
+aim.sh 自动安装 mysql-5.6/7.x 二进制版本
 
-软件包为：mysql-5.6.29{31,34}-linux-glibc2.5-x86_64.tar.gz 确保其跟 aim.sh在同一级目录
+软件包为：mysql-5.6/7.xx.-linux-glibc2.5-x86_64.tar.gz 确保其在media目录
 
 
 使用说明
