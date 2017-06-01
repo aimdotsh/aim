@@ -50,7 +50,17 @@ MYSQL_HOME=$BASEDIR
 TMPDIR=${PRE_DATADIR}/tmp_${PORT}
 LOGDIR=${PRE_LOGDIR}/log_${PORT}
 ```
- 
+ ```
+第一个参数为 MySQL 版本，第二个参数为 端口号
+./aim.sh #不加参数，默认安装 5.7.18,端口为 3306
+./aim.sh 5.6.29 #安装5.6.29 端口为 3306
+./aim.sh 5.7.18 #安装5.7.18 端口为 3306
+如果要配置为其他端口：例如端口为 563107
+./aim.sh 5.6.34 56340  #安装MySQL-5.6.34, 端口为 56340
+同样支持安装5.6和5.7的任意版本，只要确保 MySQL 5.6/5.7的软件包在media目录下面即可。
+软件包名称为 mysql-5.6/7.xx-linux-glibc2.5-x86_64.tar.gz
+其中xx为软件包的小版本号
+ ```
 配置说明：
 ===
 ## aim.sh 软件包 https://github.com/aimdotsh/aim.git
