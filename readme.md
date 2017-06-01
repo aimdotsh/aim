@@ -63,12 +63,13 @@ LOGDIR=${PRE_LOGDIR}/log_${PORT}
  ```
 配置说明：
 ===
-## aim.sh 软件包  https://github.com/aimdotsh/aim
+## aim.sh 软件包  https://github.com/aimdotsh/aim/archive/master.zip
 搭建主库
 ===
 
 ```
-#例如软件包复制到 MySQL 服务器的 /root/
+cd /root/
+wget  https://github.com/aimdotsh/aim/archive/master.zip
 unzip aim-master.zip
 cd aim
 #安装 MySQL 主库（Master）：
