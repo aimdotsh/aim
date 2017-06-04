@@ -52,7 +52,7 @@ LOGDIR=${PRE_LOGDIR}/log_${PORT}
 ```
  ```
 第一个参数为 MySQL 版本，第二个参数为 端口号
-./aim.sh #不加参数，默认安装 5.7.18,端口为 3306
+./aim.sh #不加参数，默认安装 5.7.17,端口为 3306
 ./aim.sh 5.6.29 #安装5.6.29 端口为 3306
 ./aim.sh 5.7.18 #安装5.7.18 端口为 3306
 如果要配置为其他端口：例如端口为 563107
@@ -69,15 +69,15 @@ LOGDIR=${PRE_LOGDIR}/log_${PORT}
 
 ```
 cd /root/
-wget  https://github.com/aimdotsh/aim/archive/master.zip
+wget -O aim-master.zip https://github.com/aimdotsh/aim/archive/master.zip
 unzip aim-master.zip
-cd aim
+cd aim-master
 #安装 MySQL 主库（Master）：
 chmod +x *.sh
 #修改 etc/config 配置文件中的 slave=0，修改masterip为服务器的 IP 地址，以此 IP 地址确定 service_id
 ./aim.sh  
 #之后自动安装，脚本会检测是否存在/data和/log，如果不存在，安装会退出。
-#默认安装的MySQL版本为 MySQL 5.7.18，如果要安装其他版本如 MySQL 5.6.34，请执行：
+#默认安装的MySQL版本为 MySQL 5.7.17，如果要安装其他版本如 MySQL 5.6.34，请执行：
 ./aim.sh 5.6.34
 ```
 ##搭建从库
@@ -85,7 +85,7 @@ chmod +x *.sh
 #安装 MySQL 从库（Slave）：
 #例如软件包复制到 MySQL服务器的 /root/
 unzip aim-master.zip
-cd aim
+cd aim-master
 #修改 etc/config 配置文件中的 slave=1,修改 masterip 为服务器的 IP 地址,修改 slaveip 为 Slave 库的 IP 地址。此两台机器需要配置 ssl 免登录，确保可以互相连接。
 vi aim.sh
 ##slave=1
