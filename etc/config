@@ -1,13 +1,12 @@
-ver=$1
-if [ ! $ver ]
-then ver=5.7.17
-fi
-
-PORT=$2
+PORT=$1
 if [ ! $PORT ]
-then PORT=57170
+then PORT=57180
 fi
 
+ver=$2
+if [ ! $ver ]
+then ver=5.7.18
+fi
 verdir=$(echo $ver|awk -F"." '{print $1"."$2}')
 verif7=$(echo $ver|awk -F"." '{print $2}')
 slave=0

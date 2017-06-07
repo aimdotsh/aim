@@ -24,7 +24,7 @@ function CheckSystem()
                 exit;
         fi;
 
-        egrep -i "Red Hat Enterprise Linux Server|CentOS" /etc/issue && SysName='RHEL';
+        egrep -i "Red Hat Enterprise Linux Server|CentOS" /etc/redhat-release && SysName='RHEL';
         if [ "$SysName" == ''  ]; then
                 echo '[Error] Your system is not supported for aim.';
                 exit;
@@ -189,20 +189,60 @@ if [ $? -ne 0 ];then
         exit 1
 fi
 
-cd $path
-cp mysqld /etc/init.d/mysqld
-sed -i "s:^basedir=.*:basedir=${BASEDIR}:g" /etc/init.d/mysqld 
-sed -i "s:^datadir=.*:datadir=${DATADIR}:g" /etc/init.d/mysqld
-sed -i "s:/data/mysql_data/data/:${DATADIR}/:g" /etc/init.d/mysqld
-sed -i "s:/log/mysql_log:${LOGDIR}:g" /etc/init.d/mysqld
-sed -i "s:/data/mysql_data/tmp:${TMPDIR}:g" /etc/init.d/mysqld
-chmod +x /etc/init.d/mysqld
+#cd $path
+#cp mysqld /etc/init.d/mysqld
+#sed -i "s:^basedir=.*:basedir=${BASEDIR}:g" /etc/init.d/mysqld 
+#sed -i "s:^datadir=.*:datadir=${DATADIR}:g" /etc/init.d/mysqld
+#sed -i "s:/data/mysql_data/data/:${DATADIR}/:g" /etc/init.d/mysqld
+#sed -i "s:/log/mysql_log:${LOGDIR}:g" /etc/init.d/mysqld
+#sed -i "s:/data/mysql_data/tmp:${TMPDIR}:g" /etc/init.d/mysqld
+#chmod +x /etc/init.d/mysqld
 #chkconfig --add mysqld
 #chkconfig mysqld on
 #/etc/init.d/mysqld start
-rm -rf 
+
 cd  ${BASEDIR}
 rm -rf my.cnf
+#echo "cd  ${BASEDIR}" >>${BASEDIR}/start_${PORT}.sh
+#echo "./bin/mysqld_safe --defaults-file=${PRE_DATADIR}/my_${PORT}.cnf &" >>${BASEDIR}/start_${PORT}.sh
+#echo "sleep 3;ps -ef |grep mysqld |grep -v grep" >>${BASEDIR}/start_${PORT}.sh
+
+cat > ${BASEDIR}/start_${PORT}.sh <<EOF
+cd  ${BASEDIR}
+./bin/mysqld_safe --defaults-file=${PRE_DATADIR}/my_${PORT}.cnf &
+sleep 3
+MY=\$(ps -ef |grep mysqld |grep -v grep|grep $PORT|wc -l)
+    if [ \$MY -ge "2" ];then
+       ps -ef |grep mysqld |grep -v grep|grep $PORT
+       echo "MySQL port:$PORT Started [ok]!"
+    else
+       echo "MySQL port:$PORT Started [false]"
+    fi
+EOF
+
+#echo "cd  ${BASEDIR}" >>${BASEDIR}/stop_${PORT}.sh
+#echo "./bin/mysqladmin -u root -p$MySQL_Pass shutdown -S ${DATADIR}/mysql.sock" >>${BASEDIR}/stop_${PORT}.sh
+#echo "sleep 3;ps -ef |grep mysqld |grep -v grep" >>${BASEDIR}/stop_${PORT}.sh
+
+
+cat > ${BASEDIR}/stop_${PORT}.sh <<EOF
+cd  ${BASEDIR}
+./bin/mysqladmin -u root -p$MySQL_Pass shutdown -S ${DATADIR}/mysql.sock
+sleep 2 
+MY=\$(ps -ef |grep mysqld |grep -v grep|grep $PORT|wc -l)
+    if [ \$MY -eq "0" ];then
+       echo "MySQL port:$PORT Stopped [ok]!"
+    else
+       echo "MySQL port:$PORT  Stopped [false]!"
+       echo "MySQL Info:"
+       ps -ef |grep mysqld |grep -v grep|grep $PORT
+    fi
+EOF
+
+
+chmod +x ${BASEDIR}/start_${PORT}.sh
+chmod +x ${BASEDIR}/stop_${PORT}.sh
+
 ./bin/mysqld_safe --defaults-file=${PRE_DATADIR}/my_${PORT}.cnf &
 if [ $? -ne 0 ];then
         echo " mysql   start  fail"
@@ -243,14 +283,14 @@ chmod +x ./auto_ssh.expect.sh
 
 
 ##master create repl user
-ssh -l root $masterip "$BASEDIR/bin/mysql -uroot -h127.0.0.1 -p$MySQL_Pass -e \"GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* to 'repl'@'$slaveip' identified by 'password';\" "
-ssh -l root $masterip "$BASEDIR/bin/mysql -uroot -h127.0.0.1 -p$MySQL_Pass -e \"GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* to 'repl'@'$masterip' identified by 'password';\" "
+ssh -l root $masterip "$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -e \"GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* to 'repl'@'$slaveip' identified by 'password';\" "
+ssh -l root $masterip "$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -e \"GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* to 'repl'@'$masterip' identified by 'password';\" "
 
 ##dump master data
-ssh -l root $masterip "$BASEDIR/bin/mysqldump --login-path=i3306 --master-data=2 --single-transaction -A >/root/aim/forslavedump.sql"
+ssh -l root $masterip "$BASEDIR/bin/mysqldump -uroot -hlocalhost -p$MySQL_Pass --master-data=2 --single-transaction -A >/root/aim/forslavedump.sql"
 
 scp root@$masterip:/root/aim/forslavedump.sql $path 
-$BASEDIR/bin/mysql -uroot -h127.0.0.1 -p$MySQL_Pass <$path/forslavedump.sql
+$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass <$path/forslavedump.sql
 
 ##get master master binlog pos
 #/data/mysql/mysql5.6/bin/mysql -urepl -ppassword -h$masterip -e "show master status;" |grep -v File>slave_pos.txt
@@ -260,9 +300,9 @@ cat forslavedump.sql |grep 'CHANGE MASTER TO MASTER_LOG_FILE' |head -1> slave_po
 #MASTER_FILE=$(cat slave_pos.txt|awk -F " " '{print $1}')
 mastera=$(cat slave_pos.txt|awk -F "--" '{print $2}'|awk -F ";" '{print $1}')
 
-$BASEDIR/bin/mysql -uroot -h127.0.0.1 -p$MySQL_Pass -e " $mastera ,  master_host='$masterip',master_user='repl',master_password='password';" 
-$BASEDIR/bin/mysql -uroot -h127.0.0.1 -p$MySQL_Pass -e "start slave;" 
-$BASEDIR/bin/mysql -uroot -h127.0.0.1 -p$MySQL_Pass -e "show slave status\G;" 
+$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -e " $mastera ,  master_host='$masterip',master_user='repl',master_password='password';" 
+$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -e "start slave;" 
+$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -e "show slave status\G;" 
 
 }
 
