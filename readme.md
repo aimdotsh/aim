@@ -115,7 +115,7 @@ ${BASEDIR}/start_${PORT}.sh
 ```
 ./unaim.sh
 ```
-此操作会删除 /data/mysql、/data/mysql\_data 及/log/mysql\_log目录 
+此操作会删除 /data/mysql\_data 及/log/mysql\_log目录 
 
 
 存在的问题：
