@@ -12,7 +12,7 @@ path=${path/\./$(pwd)}
 
 mem=$(cat /proc/meminfo |grep MemTotal|awk '{print $2}')
 cnf_mem=$[$mem*6/10/1000]
-cnf_mem=226
+#cnf_mem=226
 
 function Getlastip()
 {
