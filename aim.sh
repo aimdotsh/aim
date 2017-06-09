@@ -1,4 +1,6 @@
 #!/bin/sh
+# By https://aim.sh
+# liups.com
 
 . ./etc/config
 echo "it is installing MySQL-$ver for port $PORT"
