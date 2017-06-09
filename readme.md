@@ -10,7 +10,7 @@ aim.sh 支持 CentOS 6/7 系列的MySQL 6/7.x 二进制包自动安装，并且�
 * 支持自动配置 MySQL Slave
 
 
-使用
+配置说明
 =========
 
 ### etc/config 参数说明:
@@ -61,7 +61,7 @@ LOGDIR=${PRE_LOGDIR}/log_${PORT}
 软件包名称为 mysql-5.6/7.xx-linux-glibc2.5-x86_64.tar.gz
 其中xx为软件包的小版本号
  ```
-配置说明：
+使用说明：
 ===
 ## aim.sh 软件包  https://github.com/aimdotsh/aim/archive/master.zip
 搭建主库
