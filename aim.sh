@@ -1,6 +1,9 @@
 #!/bin/sh
-# By https://aim.sh
-# liups.com
+#====================================================#
+#   Author: Brty.liu <https://liups.com>             #
+#   Intro:  https://aim.sh                           #
+#           https://github.com/aimdotsh/aim          #
+#====================================================#
 
 . ./etc/config
 echo "it is installing MySQL-$ver for port $PORT"
