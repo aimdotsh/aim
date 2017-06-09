@@ -54,18 +54,18 @@ function Remove_soft()
 #yum -y remove mysql-server mysql;
 netstat -nlpt|grep mysql|grep  ${PORT}
 if [ $? -eq 0 ]
-then
-echo "MySQL is runing ,aim will exit "
-exit 1
-else
-rpm -qa |grep mysql- &&yum -y remove mysql-*
+	then
+	echo "MySQL is runing ,aim will exit "
+	exit 1
+	else
+	rpm -qa |grep mysql- &&yum -y remove mysql-*
 fi
 }
 
 function Check_mysqluser()
 {
 id mysql >& /dev/null
-if [ $? -ne 0 ]
+	if [ $? -ne 0 ]
 then
    /usr/sbin/groupadd -g 3306 mysql
    /usr/sbin/useradd -g mysql -u 3306 -d /home/mysql -m mysql -s /sbin/nologin
@@ -130,7 +130,6 @@ function Mysql_config()
 {
 
 cd $path/media/
-
 
 if [ -s mysql-${ver}-linux-glibc2.5-x86_64.tar.gz ]; then
   echo "mysql-${ver}-linux-glibc2.5-x86_64.tar.gz [found]"
