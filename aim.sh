@@ -207,13 +207,19 @@ fi
 #/etc/init.d/mysqld start
 
 cd  ${BASEDIR}
-rm -rf my.cnf
+#rm -rf my.cnf
 #echo "cd  ${BASEDIR}" >>${BASEDIR}/start_${PORT}.sh
 #echo "./bin/mysqld_safe --defaults-file=${PRE_DATADIR}/my_${PORT}.cnf &" >>${BASEDIR}/start_${PORT}.sh
 #echo "sleep 3;ps -ef |grep mysqld |grep -v grep" >>${BASEDIR}/start_${PORT}.sh
 
 cat > ${BASEDIR}/start_${PORT}.sh <<EOF
 cd  ${BASEDIR}
+MY=\$(ps -ef |grep mysqld |grep -v grep|grep $PORT|wc -l)    
+    if [ \$MY -ge "2" ];then
+       echo "MySQL port:$PORT is running!"
+       exit
+    fi
+
 ./bin/mysqld_safe --defaults-file=${PRE_DATADIR}/my_${PORT}.cnf &
 sleep 3
 MY=\$(ps -ef |grep mysqld |grep -v grep|grep $PORT|wc -l)
@@ -232,6 +238,12 @@ EOF
 
 cat > ${BASEDIR}/stop_${PORT}.sh <<EOF
 cd  ${BASEDIR}
+MY=\$(ps -ef |grep mysqld |grep -v grep|grep $PORT|wc -l)
+    if [ \$MY -eq "0" ];then
+       echo "MySQL port:$PORT is not runing!"
+    exit
+    fi
+
 ./bin/mysqladmin -u root -p$MySQL_Pass shutdown -S ${DATADIR}/mysql.sock
 sleep 2 
 MY=\$(ps -ef |grep mysqld |grep -v grep|grep $PORT|wc -l)
