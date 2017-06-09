@@ -99,7 +99,9 @@ vi aim.sh
 ./aim.sh 5.6.34
 ```
 ##启动关闭数据库
+
 安装完成之后，MySQL 数据库默认是启动的,会在${BASEDIR} 目录下面生成启动和关闭脚本
+
 关闭MySQL
 ```
 ${BASEDIR}/stop_${PORT}.sh
