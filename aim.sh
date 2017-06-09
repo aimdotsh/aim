@@ -7,7 +7,7 @@
 
 . ./etc/config
 clear
-echo "it is installing MySQL-$ver for port $PORT"
+echo "This is installing MySQL-$ver for port $PORT"
 path=$(dirname $0)
 path=${path/\./$(pwd)}
 
