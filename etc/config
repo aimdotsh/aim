@@ -1,13 +1,13 @@
-PORT=$1
+ver=$1
+if [ ! $ver ]
+then ver=5.7.18
+fi
+
+PORT=$2
 if [ ! $PORT ]
 then PORT=57180
 fi
 
-ver=$2
-if [ ! $ver ]
-then ver=5.7.18
-fi
-verdir=$(echo $ver|awk -F"." '{print $1"."$2}')
 verif7=$(echo $ver|awk -F"." '{print $2}')
 slave=0
 masterip=178.178.178.178
