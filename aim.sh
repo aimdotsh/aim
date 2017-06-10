@@ -137,6 +137,7 @@ if [ -s mysql-${ver}-linux-glibc2.5-x86_64.tar.gz ]; then
   else
   echo "Waring: mysql-${ver}-linux-glibc2.5-x86_64.tar.gz not found!!!"
   echo "PLS cp mysql-${ver}-linux-glibc2.5-x86_64.tar.gz $path/media/"
+  echo "or wget  https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-5.7.18-linux-glibc2.5-x86_64.tar.gz"
   exit
 fi
 
