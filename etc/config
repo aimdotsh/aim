@@ -7,7 +7,7 @@ PORT=$2
 if [ ! $PORT ]
 then PORT=57180
 fi
-
+verdir=$(echo $ver|awk -F"." '{print $1"."$2}')
 verif7=$(echo $ver|awk -F"." '{print $2}')
 slave=0
 masterip=178.178.178.178
