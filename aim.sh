@@ -325,6 +325,20 @@ $BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -e "show slave status\G;"
 }
 
 
+function MySQL_info()
+{
+cat <<EOF
+MySQL Database info:
+MySQL Version:$ver,PORT:$PORT
+DATA_DIR:$DATADIR
+root password:$MySQL_Pass
+#for root remote login
+grant all privileges on *.* to 'root'@'%' identified by '$MySQL_Pass' with grant option;
+#iptables
+-A INPUT -m state --state NEW -m tcp -p tcp --dport $PORT -j ACCEPT
+EOF
+}
+
 Remove_soft
 Getlastip
 CheckSystem
@@ -334,6 +348,7 @@ For_limit_env
 Check_dir
 Mysql_config
 Mysql_sec
+MySQL_info
 
 if [ $slave == "1" ];then
 	Mysql_slave	
@@ -341,15 +356,3 @@ else
 	exit 0
 fi
 
-
-cat <<EOF
-#database info
-#data_dir:$DATADIR
-#mysql program $BASEDIR
-#root password:$MySQL_Pass
-#for root remote login
-grant all privileges on *.* to 'root'@'%' identified by '$MySQL_Pass' with grant option;
-#iptables
--A INPUT -m state --state NEW -m tcp -p tcp --dport 3306 -j ACCEPT
-EOF
-exit
