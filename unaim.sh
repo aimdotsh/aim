@@ -2,7 +2,7 @@
 $BASEDIR/bin/mysqladmin -u root -p$MySQL_Pass shutdown -S ${DATADIR}/mysql.sock 
 
 sleep 20
-
+#200
 rm -rf ${DATADIR}
 rm -rf ${LOGDIR}
 rm -rf ${TMPDIR}
