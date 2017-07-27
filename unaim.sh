@@ -32,7 +32,7 @@ while getopts "v:p:hg" opt; do
         PORT="${OPTARG}"
       ;;
     v)
-      if [ $OPTARG == "5.6.31" ] || [ $OPTARG == "5.6.34" ] || [ $OPTARG == "5.7.18" ];
+      if [ $OPTARG == "5.6.31" ] || [ $OPTARG == "5.6.34" ] || [ $OPTARG == "5.7.18" ] || [ $OPTARG == "5.6.35" ];
       then
         ver=$OPTARG
       else

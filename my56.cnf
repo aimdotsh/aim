@@ -47,6 +47,9 @@ read_buffer_size       	=      	128K
 read_rnd_buffer_size   	=      	256K
 relay-log      	=      	/log/mysql_log/relay_log/relay-bin
 #read-only=1
+#gtid_mode = on
+#enforce_gtid_consistency = 1
+#log_slave_updates
 skip-external-locking
 skip-name-resolve
 slave_load_tmpdir      	=      	/data/mysql_data/tmp

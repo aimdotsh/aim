@@ -27,7 +27,7 @@ fi
 while getopts "v:p:hg" opt; do
   case $opt in
     g)
-      SKIPBINLOG=true
+      gtid=1
 	echo "gtid is on"
       ;;
     h)
@@ -38,7 +38,7 @@ while getopts "v:p:hg" opt; do
         PORT="${OPTARG}"
       ;;
     v)
-      if [ $OPTARG == "5.6.31" ] || [ $OPTARG == "5.6.34" ] || [ $OPTARG == "5.7.18" ];
+      if [ $OPTARG == "5.6.31" ] || [ $OPTARG == "5.6.34" ] || [ $OPTARG == "5.7.18" ]|| [ $OPTARG == "5.6.35" ];
       then
         ver=$OPTARG
       else
@@ -216,6 +216,16 @@ sed -i "s:/data/mysql_data/tmp:${TMPDIR}:g" ${PRE_DATADIR}/my_${PORT}.cnf
 if [ $slave -eq 1 ];then
 	sed -i "s/#read-only=1/read-only=1/g" ${PRE_DATADIR}/my_${PORT}.cnf 
 fi
+
+if [ $gtid -eq 1 ];then
+        sed -i "s/#gtid_mode = on/gtid_mode = on/g" ${PRE_DATADIR}/my_${PORT}.cnf
+        sed -i "s/#enforce_gtid_consistency = 1/enforce_gtid_consistency = 1/g" ${PRE_DATADIR}/my_${PORT}.cnf
+        sed -i "s/#log_slave_updates/#log_slave_updates/g" ${PRE_DATADIR}/my_${PORT}.cnf
+fi
+
+#gtid_mode = on
+#enforce_gtid_consistency = 1
+#binlog_format
 
 cd  $BASEDIR
 
