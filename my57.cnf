@@ -22,6 +22,7 @@ max_connect_errors = 100000000
 table_open_cache = 2002
 table_definition_cache = 2002
 table_open_cache_instances = 64
+lower_case_table_names 	=      	1
 thread_stack = 512K
 external-locking = FALSE
 max_allowed_packet = 32M

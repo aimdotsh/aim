@@ -5,15 +5,70 @@
 #           https://github.com/aimdotsh/aim          #
 #====================================================#
 
+USAGE="
+Options:
+================
+    v: The version of MySQL  either  eg:5.6.31 or 5.6.34 or 5.7.18
+    p: The port of MySQL eg: 3306,5678
+Examples:
+================
+Install MySQL 5.7.18 on port 57180
+    $0 -v 5.7.18 -p 57180
+Install MySQL 5.6.31 on port 3306
+    $0 -v 5.6.31 -p 3306
+"
+
+if [ $# -lt 4 ]
+then
+   echo "$USAGE"
+   exit
+fi
+
+while getopts "v:p:hg" opt; do
+  case $opt in
+    g)
+      SKIPBINLOG=true
+	echo "gtid is on"
+      ;;
+    h)
+      echo "$USAGE"
+      exit 0
+      ;;
+    p)
+        PORT="${OPTARG}"
+      ;;
+    v)
+      if [ $OPTARG == "5.6.31" ] || [ $OPTARG == "5.6.34" ] || [ $OPTARG == "5.7.18" ];
+      then
+        ver=$OPTARG
+      else
+        echo "Invalid -v option, please run again with either '-v 5.6.31' or '-v 5.6.31',or '-v 5.7.18'"
+        exit 1
+      fi
+      ;;
+    \?)
+      echo "Invalid option: -$OPTARG" >&2
+      echo $"$USAGE"
+      exit 1
+      ;;
+    :)
+      echo "Option -$OPTARG requires an argument." >&2
+      echo $"$USAGE"
+      exit 1
+      ;;
+  esac
+done
+
 . ./etc/config
+
 clear
 echo "This is installing MySQL-$ver for port $PORT"
 path=$(dirname $0)
 path=${path/\./$(pwd)}
 
 mem=$(cat /proc/meminfo |grep MemTotal|awk '{print $2}')
-cnf_mem=$[$mem*6/10/1000]
-#cnf_mem=226
+#cnf_mem=$[$mem*6/10/1000]
+cnf_mem=226
 
 function Getlastip()
 {
@@ -41,7 +96,7 @@ function CheckSystem()
                 SysBit='64';
         fi;
 
-	yum install perl -y
+	yum install perl libaio perl-Data-Dumper  autoconf -y
         Cpunum=`cat /proc/cpuinfo |grep 'processor'|wc -l`;
         RamTotal=`free -m | grep 'Mem' | awk '{print $2}'`;
         RamSwap=`free -m | grep 'Swap' | awk '{print $2}'`;
@@ -164,8 +219,8 @@ fi
 sed -i "s/466632K/${cnf_mem}M/g" ${PRE_DATADIR}/my_${PORT}.cnf
 sed -i "s/339901/${last_ip}/g"  ${PRE_DATADIR}/my_${PORT}.cnf
 sed -i "s/3306/${PORT}/g"  ${PRE_DATADIR}/my_${PORT}.cnf
-sed -i "s:^basedir=.*:basedir=${BASEDIR}:g" ${PRE_DATADIR}/my_${PORT}.cnf 
-sed -i "s:^datadir=.*:datadir=${DATADIR}:g" ${PRE_DATADIR}/my_${PORT}.cnf 
+sed -i "s:^basedir.*:basedir=${BASEDIR}:g" ${PRE_DATADIR}/my_${PORT}.cnf 
+sed -i "s:^datadir.*:datadir=${DATADIR}:g" ${PRE_DATADIR}/my_${PORT}.cnf 
 sed -i "s:/data/mysql_data/data:${DATADIR}:g" ${PRE_DATADIR}/my_${PORT}.cnf 
 sed -i "s:/log/mysql_log:${LOGDIR}:g"  ${PRE_DATADIR}/my_${PORT}.cnf
 sed -i "s:/data/mysql_data/tmp:${TMPDIR}:g" ${PRE_DATADIR}/my_${PORT}.cnf 
@@ -270,12 +325,16 @@ fi
 
 function Mysql_sec()
 {
-sleep 50
+sleep 20
 ps -ef |grep mysqld
 #echo "$BASEDIR/bin/mysqladmin -u root password $MySQL_Pass  -S ${DATADIR}/mysql.sock"
 $BASEDIR/bin/mysqladmin -u root password $MySQL_Pass  -S ${DATADIR}/mysql.sock
 #echo "$BASEDIR/bin/mysqladmin -u root  password $MySQL_Pass  -S ${DATADIR}/mysql.sock"
 #$BASEDIR/bin/mysqladmin -u root  password $MySQL_Pass  -S ${DATADIR}/mysql.sock
+
+if [ $verif7 -ne 7  ];then
+  $BASEDIR/bin/mysql -uroot -p$MySQL_Pass -S ${DATADIR}/mysql.sock  -e "delete from mysql.user where user='';delete from mysql.user where password='';flush privileges;"
+fi
 #$BASEDIR/bin/mysql -uroot -p$MySQL_Pass -S ${DATADIR}/mysql.sock  -e "delete from mysql.user where user='';delete from mysql.user where password='';flush privileges;"
 }
 
@@ -301,26 +360,27 @@ chmod +x ./auto_ssh.expect.sh
 
 
 ##master create repl user
-ssh -l root $masterip "$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -e \"GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* to 'repl'@'$slaveip' identified by 'password';\" "
-ssh -l root $masterip "$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -e \"GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* to 'repl'@'$masterip' identified by 'password';\" "
+ssh -l root $masterip "$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -S $mastersocket -e \"GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* to 'repl'@'$slaveip' identified by 'password';\" "
+ssh -l root $masterip "$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -S $mastersocket -e \"GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* to 'repl'@'$masterip' identified by 'password';\" "
 
 ##dump master data
-ssh -l root $masterip "$BASEDIR/bin/mysqldump -uroot -hlocalhost -p$MySQL_Pass --master-data=2 --single-transaction -A >/root/aim/forslavedump.sql"
+ssh -l root $masterip "mkdir -p $path"
+ssh -l root $masterip "$BASEDIR/bin/mysqldump -uroot -hlocalhost -p$MySQL_Pass -S $mastersocket  --master-data=2 --single-transaction -A >$path/forslavedump.sql"
 
-scp root@$masterip:/root/aim/forslavedump.sql $path 
-$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass <$path/forslavedump.sql
+scp root@$masterip:$path/forslavedump.sql $path/forslavedump-slave.sql 
+$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -S $socket  <$path/forslavedump-slave.sql
 
 ##get master master binlog pos
 #/data/mysql/mysql5.6/bin/mysql -urepl -ppassword -h$masterip -e "show master status;" |grep -v File>slave_pos.txt
-cat forslavedump.sql |grep 'CHANGE MASTER TO MASTER_LOG_FILE' |head -1> slave_pos.txt
+cat forslavedump-slave.sql |grep 'CHANGE MASTER TO MASTER_LOG_FILE' |head -1> slave_pos.txt
 
 #MASTER_POS=$(cat slave_pos.txt|awk -F " " '{print $2}')
 #MASTER_FILE=$(cat slave_pos.txt|awk -F " " '{print $1}')
 mastera=$(cat slave_pos.txt|awk -F "--" '{print $2}'|awk -F ";" '{print $1}')
 
-$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -e " $mastera ,  master_host='$masterip',master_user='repl',master_password='password';" 
-$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -e "start slave;" 
-$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -e "show slave status\G;" 
+$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -S $socket -e " $mastera ,  master_host='$masterip',master_user='repl',master_password='password',master_port=$masterport;" 
+$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -S $socket -e "start slave;" 
+$BASEDIR/bin/mysql -uroot -hlocalhost -p$MySQL_Pass -S $socket -e "show slave status\G;" 
 
 }
 

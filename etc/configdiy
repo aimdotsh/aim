@@ -1,15 +1,22 @@
+ver=$1
+if [ ! $ver ]
+then ver=5.7.18
+fi
+
+PORT=$2
+if [ ! $PORT ]
+then PORT=57180
+fi
 verdir=$(echo $ver|awk -F"." '{print $1"."$2}')
 verif7=$(echo $ver|awk -F"." '{print $2}')
-slave=1
-masterip=10.29.234.59
-masterport=5678
-mastersocket=/u01/mysql_data/data_5678/mysql.sock
-slaveip=10.29.234.59
+slave=0
+masterip=178.178.178.178
+slaveip=178.178.178.179
 ssl_user=root
-ssl_passwd='Foxconn$88'
-PRE_BASEDIR=/u01/mysql
-PRE_LOGDIR=/u01/mysql_log
-PRE_DATADIR=/u01/mysql_data
+ssl_passwd=redhat
+PRE_BASEDIR=/data/mysql
+PRE_LOGDIR=/log/mysql_log
+PRE_DATADIR=/data/mysql_data
 MySQL_Pass=aim.sh
 BASEDIR=$PRE_BASEDIR/mysql${verdir}
 DATADIR=${PRE_DATADIR}/data_${PORT}
@@ -17,4 +24,3 @@ MYSQL_DATADIR=$DATADIR
 MYSQL_HOME=$BASEDIR
 TMPDIR=${PRE_DATADIR}/tmp_${PORT}
 LOGDIR=${PRE_LOGDIR}/log_${PORT}
-socket=$DATADIR/mysql.sock
