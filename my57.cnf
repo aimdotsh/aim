@@ -9,6 +9,7 @@ no-auto-rehash
 [mysqld]
 user	= mysql
 port	= 3306
+server_id = 339901
 basedir	= /data/mysql/mysql5.7
 datadir	= /data/mysql_data/data
 socket	= /data/mysql_data/data/mysql.sock
@@ -43,7 +44,6 @@ relay-log 	=      	/log/mysql_log/relay_log/relay-bin
 slow-query-log
 slow_query_log_file    	=      	/log/mysql_log/slow_queries.log
 long_query_time = 0.1
-server-id = 3306
 sync_binlog = 1
 binlog_cache_size = 4M
 max_binlog_cache_size = 1G
