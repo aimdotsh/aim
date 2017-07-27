@@ -96,7 +96,7 @@ function CheckSystem()
                 SysBit='64';
         fi;
 
-	yum install perl libaio perl-Data-Dumper  autoconf -y
+	yum install perl libaio  autoconf -y
         Cpunum=`cat /proc/cpuinfo |grep 'processor'|wc -l`;
         RamTotal=`free -m | grep 'Mem' | awk '{print $2}'`;
         RamSwap=`free -m | grep 'Swap' | awk '{print $2}'`;
@@ -145,26 +145,12 @@ mysql    hard    memlock       396826317
 # add by aim end
 EOF
 
-cp /etc/profile  /etc/profile.aimbk
-
-cat >>/etc/profile <<EOF
-#add by aim begin
-export MYSQL_HOME=$BASEDIR
-export PATH=$MYSQL_HOME/bin:\$PATH:/usr/bin:/bin:/usr/bin/X11:/usr/local/bin
-export MYSQL_DATADIR=$DATADIR
-export MYSQL_LOGDIR=$LOGDIR
-export TMPDIR=$TMPDIR
-export MYSQL_UNIX_PORT=$MYSQL_DATADIR/mysql.sock
-export MYSQL_TCP_PORT=$PORT
-export PATH
-#add by aim end
-EOF
 }
 
 function Check_dir()
 {
-if [ ! -d "/data" -o ! -d "/log"  ]; then
-  echo "/data or /log  Path does not exist,pls check!"
+if [ ! -d "${PRE_DATADIR}" -o ! -d "${PRE_LOGDIR}"  ]; then
+  echo "${PRE_DATADIR} or ${PRE_LOGDIR}  Path does not exist,pls check!"
   exit
 else
   mkdir -p  ${PRE_BASEDIR}
@@ -192,7 +178,7 @@ if [ -s mysql-${ver}-linux-glibc2.5-x86_64.tar.gz ]; then
   else
   echo "Waring: mysql-${ver}-linux-glibc2.5-x86_64.tar.gz not found!!!"
   echo "PLS cp mysql-${ver}-linux-glibc2.5-x86_64.tar.gz $path/media/"
-  echo "or wget  https://cdn.mysql.com//Downloads/MySQL-5.7/mysql-5.7.18-linux-glibc2.5-x86_64.tar.gz"
+  echo "or wget  https://cdn.mysql.com/Downloads/MySQL-${verdir}/mysql-${ver}-linux-glibc2.5-x86_64.tar.gz"
   exit
 fi
 
@@ -415,4 +401,3 @@ if [ $slave == "1" ];then
 else
 	exit 0
 fi
-
