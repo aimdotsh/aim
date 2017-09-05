@@ -1,6 +1,6 @@
 [client]
 port	= 3306
-socket	= /data/mysql_data/data/mysql.sock
+socket	= MYSQL_DATADIR/mysql.sock
 
 [mysql]
 prompt="\u@\h \R:\m:\s [\d]> "
@@ -10,9 +10,9 @@ no-auto-rehash
 user	= mysql
 port	= 3306
 server_id = 339901
-basedir	= /data/mysql/mysql5.7
-datadir	= /data/mysql_data/data
-socket	= /data/mysql_data/data/mysql.sock
+basedir	= MYSQL_BASEDIR 
+datadir	= MYSQL_DATADIR 
+socket	= MYSQL_DATADIR/mysql.sock
 pid-file = mysql.pid
 character-set-server = utf8mb4
 skip_name_resolve = 1
@@ -35,14 +35,15 @@ query_cache_type = 0
 interactive_timeout = 600
 wait_timeout = 600
 tmp_table_size = 32M
+tmpdir  =     TMPDIR 
 max_heap_table_size = 32M
 slow_query_log = 1
-innodb_log_group_home_dir      	=      	/log/mysql_log/innodb_log
-log-bin = /log/mysql_log/bin_log/mysql-bin
-log_error=/log/mysql_log/mysql.err
-relay-log 	=      	/log/mysql_log/relay_log/relay-bin
+innodb_log_group_home_dir      	=      	LOGDIR/innodb_log
+log-bin = LOGDIR/bin_log/mysql-bin
+log_error= LOGDIR/mysql.err
+relay-log 	=      LOGDIR/relay_log/relay-bin
 slow-query-log
-slow_query_log_file    	=      	/log/mysql_log/slow_queries.log
+slow_query_log_file    	=      LOGDIR/slow_queries.log
 long_query_time = 0.1
 sync_binlog = 1
 binlog_cache_size = 4M
