@@ -6,8 +6,8 @@ aim.sh 支持 CentOS 6\7 系列的MySQL 5.6\7.x 二进制包自动安装，并�
 用途
 ===========
 
-* 支持 MySQL 自动安装
-* 支持自动配置 MySQL Slave
+* MySQL 自动安装
+* 自动配置 MySQL Slave
 
 
 配置说明
