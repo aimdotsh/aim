@@ -17,49 +17,51 @@ aim.sh 支持 CentOS 6\7 系列的MySQL 5.6\7.x 二进制包自动安装，并�
 
 ```
 slave=0
-masterip=178.178.178.178
-slaveip=178.178.178.179
+masterip=192.168.56.209
+masterport=5718
+mastersocket=/data/mysql_data/data_5718/mysql.sock
+slaveip=192.168.56.209
 ssl_user=root
-ssl_passwd=redhat
+ssl_passwd='password'
 PRE_BASEDIR=/data/mysql
 PRE_LOGDIR=/log/mysql_log
 PRE_DATADIR=/data/mysql_data
 MySQL_Pass=aim.sh
-
 BASEDIR=$PRE_BASEDIR/mysql${verdir}
 DATADIR=${PRE_DATADIR}/data_${PORT}
 MYSQL_DATADIR=$DATADIR
 MYSQL_HOME=$BASEDIR
 TMPDIR=${PRE_DATADIR}/tmp_${PORT}
 LOGDIR=${PRE_LOGDIR}/log_${PORT}
+socket=$DATADIR/mysql.sock
+
 ```
 
 ```txt
-slave=0 #是否为Slave库，0 为否
-masterip #MySQL主库 IP
-slaveip #MySQL Slave 库 IP
-ssl_passwd=redhat #为了方便配置主从服务器，配置Slave和Master服务器之间免登录的 OS 用户名，通常为root
-PRE_BASEDIR=/data/mysql
-PRE_LOGDIR=/log/mysql_log
-PRE_DATADIR=/data/mysql_data
+slave=0 #是否为Slave库，0 为否， 1 为是
+masterip=192.168.56.09 #MySQL主库 IP
+masterport=5718 #手动指定 MySQL主库 的端口号，仅slave=1有效
+mastersocket=/data/mysql_data/data_5718/mysql.sock #手动指定 MySQL主库 的 sock 文件，仅slave=1有效
+slaveip=192.168.56.209 #MySQL Slave 库 IP，仅slave=1有效
+ssl_user=root #为了方便配置主从服务器，配置Slave和Master服务器之间免登录的 OS 用户名，通常为root，仅slave=1有效
+ssl_passwd='password' # ssl_user 对应的 OS 密码，仅slave=1有效
+PRE_BASEDIR=/data/mysql #MySQL安装的目录
+PRE_LOGDIR=/log/mysql_log #MySQL日志目录
+PRE_DATADIR=/data/mysql_data # #MySQL数据目录
 
-BASEDIR=$PRE_BASEDIR/mysql${verdir}
-DATADIR=${PRE_DATADIR}/data_${PORT}
+BASEDIR=$PRE_BASEDIR/mysql${verdir} #MySQL安装的目录带版本号，eg mysql5.6/5.7
+DATADIR=${PRE_DATADIR}/data_${PORT} #MySQL数据目录带端口号
 MYSQL_DATADIR=$DATADIR
 MYSQL_HOME=$BASEDIR
-TMPDIR=${PRE_DATADIR}/tmp_${PORT}
-LOGDIR=${PRE_LOGDIR}/log_${PORT}
+TMPDIR=${PRE_DATADIR}/tmp_${PORT} #MySQL tmp 目录带端口号
+LOGDIR=${PRE_LOGDIR}/log_${PORT} #MySQL 日志目录带端口号
 ```
- ```
-第一个参数为 MySQL 版本，第二个参数为 端口号
-./aim.sh #不加参数，默认安装 5.7.17,端口为 3306
-./aim.sh 5.6.29 #安装5.6.29 端口为 3306
-./aim.sh 5.7.18 #安装5.7.18 端口为 3306
-如果要配置为其他端口：例如端口为 563107
-./aim.sh 5.6.34 56340  #安装MySQL-5.6.34, 端口为 56340
-同样支持安装5.6和5.7的任意版本，只要确保 MySQL 5.6/5.7的软件包在media目录下面即可。
-软件包名称为 mysql-5.6/7.xx-linux-glibc2.5-x86_64.tar.gz
-其中xx为软件包的小版本号
+##使用说明
+```
+./aim.sh -v 版本 -p 端口号
+eg
+./aim.sh -v 5.7.18 -p 5718
+
  ```
 使用说明：
 ===
@@ -75,10 +77,8 @@ cd aim-master
 #安装 MySQL 主库（Master）：
 chmod +x *.sh
 #修改 etc/config 配置文件中的 slave=0，修改masterip为服务器的 IP 地址，以此 IP 地址确定 service_id
-./aim.sh  
-#之后自动安装，脚本会检测是否存在/data和/log，如果不存在，安装会退出。
-#默认安装的MySQL版本为 MySQL 5.7.17，如果要安装其他版本如 MySQL 5.6.34，请执行：
-./aim.sh 5.6.34
+./aim.sh -v 5.7.18 -p 5718
+
 ```
 ##搭建从库
 ```
@@ -88,15 +88,16 @@ unzip aim-master.zip
 cd aim-master
 #修改 etc/config 配置文件中的 slave=1,修改 masterip 为服务器的 IP 地址,修改 slaveip 为 Slave 库的 IP 地址。此两台机器需要配置 ssl 免登录，确保可以互相连接。
 vi aim.sh
-##slave=1
-##masterip=188.188.188.188   #Master库的ip
-##slaveip=189.189.189.189    #Slave库的ip
-##ssl_user=root              #Master主机的OS 用户，默认root
-##ssl_passwd=redhat          #ssl_user 对应的密码
+slave=1 #设置slave=1
+masterip=192.168.56.09 #设置MySQL主库 IP
+masterport=5718 #手动指定 MySQL主库 的端口号，仅slave=1有效
+mastersocket=/data/mysql_data/data_5718/mysql.sock #手动指定 MySQL主库 的 sock 文件，仅slave=1有效
+slaveip=192.168.56.209 #MySQL Slave 库 IP，仅slave=1有效
+ssl_user=root #为了方便配置主从服务器，配置Slave和Master服务器之间免登录的 OS 用户名，通常为root，仅slave=1有效
+ssl_passwd='password' # ssl_user 对应的 OS 密码，仅slave=1有效
 #安装Slave
-./aim.sh 
-#同样默认安装的是MySQL5.6.31版本，如果安装其它版本请执行：
-./aim.sh 5.6.34
+./aim.sh -v 5.7.18 -p 5718  #建议主从在不同主机上，端口相同。
+
 ```
 ##启动关闭数据库
 
@@ -113,9 +114,9 @@ ${BASEDIR}/start_${PORT}.sh
 删除aim.sh搭建的数据库
 ===
 ```
-./unaim.sh
+./unaim.sh  -v 5.7.18 -p 5718
 ```
-此操作会删除 /data/mysql\_data 及/log/mysql\_log目录 
+此操作会删除配置文件中指定的数据库文件目录请谨慎。 
 
 
 存在的问题：
