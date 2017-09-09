@@ -1,20 +1,14 @@
 aim.sh 自动安装 MySQL 5.6／5.7，支持自动配置SLAVE
-========================
-
-aim.sh 支持 CentOS 6\7 系列的MySQL 5.6\7.x 二进制包自动安装，并且支持自动配置Slave。
-
-用途
 ===========
-
+aim.sh(http://aim.sh) 支持 CentOS 6\7 系列的MySQL 5.6\7.x 二进制包自动安装，并且支持自动配置Slave。
+用途 
+===========
 * MySQL 自动安装
 * 自动配置 MySQL Slave
 
-
 配置说明
 =========
-
 ### etc/config 参数说明:
-
 ```
 slave=0
 masterip=192.168.56.209
@@ -34,9 +28,7 @@ MYSQL_HOME=$BASEDIR
 TMPDIR=${PRE_DATADIR}/tmp_${PORT}
 LOGDIR=${PRE_LOGDIR}/log_${PORT}
 socket=$DATADIR/mysql.sock
-
 ```
-
 ```txt
 slave=0 #是否为Slave库，0 为否， 1 为是
 masterip=192.168.56.09 #MySQL主库 IP
@@ -48,7 +40,6 @@ ssl_passwd='password' # ssl_user 对应的 OS 密码，仅slave=1有效
 PRE_BASEDIR=/data/mysql #MySQL安装的目录
 PRE_LOGDIR=/log/mysql_log #MySQL日志目录
 PRE_DATADIR=/data/mysql_data # #MySQL数据目录
-
 BASEDIR=$PRE_BASEDIR/mysql${verdir} #MySQL安装的目录带版本号，eg mysql5.6/5.7
 DATADIR=${PRE_DATADIR}/data_${PORT} #MySQL数据目录带端口号
 MYSQL_DATADIR=$DATADIR
@@ -59,16 +50,14 @@ LOGDIR=${PRE_LOGDIR}/log_${PORT} #MySQL 日志目录带端口号
 ##使用说明
 ```
 ./aim.sh -v 版本 -p 端口号
-eg
+eg:
 ./aim.sh -v 5.7.18 -p 5718
-
- ```
+```
 使用说明：
 ===
-## aim.sh 软件包  https://github.com/aimdotsh/aim/archive/master.zip
+## aim.sh 软件包 https://github.com/aimdotsh/aim/archive/master.zip
 搭建主库
 ===
-
 ```
 cd /root/
 wget -O aim-master.zip https://github.com/aimdotsh/aim/archive/master.zip
@@ -78,7 +67,6 @@ cd aim-master
 chmod +x *.sh
 #修改 etc/config 配置文件中的 slave=0，修改masterip为服务器的 IP 地址，以此 IP 地址确定 service_id
 ./aim.sh -v 5.7.18 -p 5718
-
 ```
 ##搭建从库
 ```
@@ -96,13 +84,10 @@ slaveip=192.168.56.209 #MySQL Slave 库 IP，仅slave=1有效
 ssl_user=root #为了方便配置主从服务器，配置Slave和Master服务器之间免登录的 OS 用户名，通常为root，仅slave=1有效
 ssl_passwd='password' # ssl_user 对应的 OS 密码，仅slave=1有效
 #安装Slave
-./aim.sh -v 5.7.18 -p 5718  #建议主从在不同主机上，端口相同。
-
+./aim.sh -v 5.7.18 -p 5718  #建议主从在不同主机上，端口相同。
 ```
 ##启动关闭数据库
-
 安装完成之后，MySQL 数据库默认是启动的,会在${BASEDIR} 目录下面生成启动和关闭脚本
-
 关闭MySQL
 ```
 ${BASEDIR}/stop_${PORT}.sh
@@ -114,14 +99,12 @@ ${BASEDIR}/start_${PORT}.sh
 删除aim.sh搭建的数据库
 ===
 ```
-./unaim.sh  -v 5.7.18 -p 5718
+./unaim.sh -v 5.7.18 -p 5718
 ```
-此操作会删除配置文件中指定的数据库文件目录请谨慎。 
+此操作会删除配置文件中指定的数据库文件目录请谨慎。
+##存在的问题
 
-
-存在的问题：
 ===
-
 在搭建Slave的时候会配置Slave主机到Master主机上面的免登录进行数据库备份。部分主机在配置免登录的时候可能会失败，有的主机会提示输入密码，设置的等待超时时间为60s，如果在60s内手动输入密码即可以解决，但是如果超时了，会导致配置Slave失败。解决方案，执行./unaim.sh 删除安装的数据，重新运行./aim.sh在等待输入密码的时候手动输入密码，或者手动配置免登录,如下：
 手动配置免登录
 ```
@@ -130,5 +113,5 @@ ${BASEDIR}/start_${PORT}.sh
 ```
 ./ssh-copy-id 188.188.188.188
 ```
-
 完成之后继续运行aim.sh即可。
+
