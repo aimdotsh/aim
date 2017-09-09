@@ -114,7 +114,7 @@ function Remove_soft()
         echo "MySQL is runing ,aim will exit "
         exit 1
     else
-        rpm -qa |grep mysql- &&yum -y remove mysql-*
+        rpm -qa |grep mysql-server &&yum -y remove mysql-server*
     fi
 }
 

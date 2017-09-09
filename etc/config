@@ -1,7 +1,7 @@
 verdir=$(echo $ver|awk -F"." '{print $1"."$2}')
 verif7=$(echo $ver|awk -F"." '{print $2}')
 slave=0
-masterip=192.168.56.209
+masterip=192.168.56.109
 masterport=5718
 mastersocket=/data/mysql_data/data_5718/mysql.sock
 slaveip=192.168.56.209
