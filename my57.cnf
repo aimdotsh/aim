@@ -42,6 +42,7 @@ innodb_log_group_home_dir      	=      	LOGDIR/innodb_log
 log-bin = LOGDIR/bin_log/mysql-bin
 log_error= LOGDIR/mysql.err
 relay-log 	=      LOGDIR/relay_log/relay-bin
+#read-only=1
 slow-query-log
 slow_query_log_file    	=      LOGDIR/slow_queries.log
 long_query_time = 0.1
