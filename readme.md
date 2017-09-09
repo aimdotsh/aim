@@ -1,6 +1,7 @@
 aim.sh 自动安装 MySQL 5.6／5.7，支持自动配置SLAVE
 ===========
 aim.sh(http://aim.sh) 支持 CentOS 6\7 系列的MySQL 5.6\7.x 二进制包自动安装，并且支持自动配置Slave。
+
 用途 
 ===========
 * MySQL 自动安装
