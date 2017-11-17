@@ -5,6 +5,8 @@
 #           https://github.com/aimdotsh/aim          #
 #====================================================#
 
+umask 022
+
 USAGE="
 Options:
 ================
@@ -149,11 +151,7 @@ EOF
 
 function Check_dir()
 {
-    if [ ! -d "${PRE_DATADIR}" -o ! -d "${PRE_LOGDIR}"  ]; then
-        echo "${PRE_DATADIR} or ${PRE_LOGDIR}  Path does not exist,pls check!"
-        exit
-    else
-        mkdir -p  ${PRE_BASEDIR}
+        mkdir -p ${PRE_BASEDIR}
         chown -R mysql:mysql ${PRE_BASEDIR}
         mkdir -p $DATADIR
         mkdir -p $TMPDIR
@@ -164,9 +162,8 @@ function Check_dir()
         mkdir -p $LOGDIR/innodb_log
         mkdir -p $LOGDIR/relay_log
         chown -R mysql:mysql $LOGDIR
-	chown -R ${PRE_DATADIR}
-	chown -R ${PRE_LOGDIR} 
-    fi
+	chown -R mysql:mysql ${PRE_DATADIR}
+	chown -R mysql:mysql ${PRE_LOGDIR} 
 }
 
 
