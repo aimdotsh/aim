@@ -164,6 +164,8 @@ function Check_dir()
         mkdir -p $LOGDIR/innodb_log
         mkdir -p $LOGDIR/relay_log
         chown -R mysql:mysql $LOGDIR
+	chown -R ${PRE_DATADIR}
+	chown -R ${PRE_LOGDIR} 
     fi
 }
 
