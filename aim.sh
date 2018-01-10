@@ -98,7 +98,7 @@ function CheckSystem()
         SysBit='64';
     fi;
 
-    yum install perl libaio  autoconf -y
+    yum install perl perl-Data-Dumper libaio autoconf -y
     Cpunum=`cat /proc/cpuinfo |grep 'processor'|wc -l`;
     RamTotal=`free -m | grep 'Mem' | awk '{print $2}'`;
     RamSwap=`free -m | grep 'Swap' | awk '{print $2}'`;
