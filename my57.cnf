@@ -19,7 +19,7 @@ skip_name_resolve = 1
 open_files_limit    = 65535
 back_log = 1024
 max_connections = 1500
-max_connect_errors = 100000000
+max_connect_errors = 900000000
 table_open_cache = 2002
 table_definition_cache = 2002
 table_open_cache_instances = 64
@@ -95,38 +95,22 @@ innodb_max_dirty_pages_pct = 50
 innodb_flush_method = O_DIRECT
 innodb_lru_scan_depth = 4000
 innodb_checksum_algorithm = crc32
-#innodb_file_format = Barracuda
-#innodb_file_format_max = Barracuda
+innodb_file_format = Barracuda
+innodb_file_format_max = Barracuda
 innodb_lock_wait_timeout = 10
 innodb_rollback_on_timeout = 1
 innodb_print_all_deadlocks = 1
 innodb_file_per_table = 1
 innodb_online_alter_log_max_size = 1G
 internal_tmp_disk_storage_engine = InnoDB
-innodb_status_file = 1
-innodb_status_output = 1
-innodb_status_output_locks = 1
+innodb_status_file = 0
+innodb_status_output = 0
+innodb_status_output_locks = 0
 innodb_stats_on_metadata = 0
 
 #performance_schema
 performance_schema = 1
 performance_schema_instrument = '%=on'
-
-#innodb monitor
-innodb_monitor_enable="module_innodb"
-innodb_monitor_enable="module_server"
-innodb_monitor_enable="module_dml"
-innodb_monitor_enable="module_ddl"
-innodb_monitor_enable="module_trx"
-innodb_monitor_enable="module_os"
-innodb_monitor_enable="module_purge"
-innodb_monitor_enable="module_log"
-innodb_monitor_enable="module_lock"
-innodb_monitor_enable="module_buffer"
-innodb_monitor_enable="module_index"
-innodb_monitor_enable="module_ibuf_system"
-innodb_monitor_enable="module_buffer_page"
-innodb_monitor_enable="module_adaptive_hash"
 
 [mysqldump]
 quick
