@@ -75,6 +75,7 @@ innodb_sync_spin_loops = 100
 innodb_spin_wait_delay = 30
 transaction_isolation = REPEATABLE-READ
 default-time-zone = '+8:00'
+log_timestamps = SYSTEM
 #innodb_additional_mem_pool_size = 16M
 innodb_buffer_pool_size = 466632K 
 innodb_buffer_pool_instances = 8
