@@ -317,25 +317,26 @@ check_port_and_paths() {
     [[ ! -e "$CNF_FILE" ]] || die "configuration already exists: $CNF_FILE"
 }
 
+create_directory_0755() {
+    local directory="$1" parent
+    [[ -d "$directory" ]] && return 0
+    [[ ! -e "$directory" ]] || die "installation path is not a directory: $directory"
+    parent="$(dirname -- "$directory")"
+    if [[ "$parent" != "$directory" ]]; then
+        create_directory_0755 "$parent"
+    fi
+    run mkdir "$directory"
+    (( DRY_RUN )) || chmod 0755 "$directory"
+}
+
 prepare_install_roots() {
-    local root current
-    local -a created=()
+    local root
     for root in "$BASE_ROOT" "$DATA_ROOT" "$LOG_ROOT" "$TMP_ROOT"; do
-        [[ ! -e "$root" || -d "$root" ]] || die "installation root is not a directory: $root"
-        current="$root"
-        while [[ "$current" != / && ! -e "$current" ]]; do
-            created+=("$current")
-            current="$(dirname -- "$current")"
-        done
-        run mkdir -p "$root"
+        create_directory_0755 "$root"
     done
     if (( DRY_RUN )); then
-        log "would make newly created installation roots traversable"
-        return
+        log "would create missing installation roots with mode 0755"
     fi
-    for current in "${created[@]}"; do
-        chmod 0755 "$current"
-    done
 }
 
 install_dependencies() {
