@@ -2,6 +2,8 @@
 
 `aim.sh` 使用 Oracle MySQL Community Server 官方通用二进制包，在一台 Linux 主机上安装相互隔离的 MySQL 实例。支持单机、主库、GTID 从库，以及 MySQL 8.0 单主模式 MGR。
 
+![aim.sh Linux 环境下 MySQL 自动化安装与集群部署架构总览](docs/images/aim-overview.png)
+
 ## 支持范围
 
 | MySQL | x86_64 | i686 | ARM64 | 初始化方式 | 复制命令 |
