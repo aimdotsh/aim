@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 umask 027
 
-readonly AIM_VERSION="2.0.0"
+readonly AIM_VERSION="2.1.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 VERSION=""
@@ -33,6 +33,14 @@ INSTALL_DEPS=1
 DRY_RUN=0
 REINITIALIZE=0
 ASSUME_YES=0
+MGR_LOCAL_ADDRESS=""
+MGR_PORT="33061"
+MGR_SEEDS=""
+MGR_GROUP_NAME=""
+MGR_ALLOWLIST=""
+MGR_BOOTSTRAP=0
+MGR_RECOVERY_USER="aim_mgr"
+MGR_RECOVERY_PASSWORD=""
 ARCHIVE=""
 DOWNLOAD_URL=""
 OS_ID=""
@@ -63,7 +71,7 @@ Required:
 
 Instance:
   -p, --port PORT             TCP port (default: 3306)
-      --role ROLE             standalone, source/master, or replica/slave
+      --role ROLE             standalone, source/master, replica/slave, or mgr
   -g, --gtid                 Enable GTID (default)
       --no-gtid              Disable GTID (replica mode requires GTID)
       --server-id ID          Replication server_id (derived automatically)
@@ -78,6 +86,18 @@ Replication:
       --source-port PORT      Source port (default: 3306)
       --source-user USER      Replication account on source
       --source-password PASS  Replication password on source
+
+MGR (MySQL 8.0.23+):
+      --mgr-local-address IP  This member's address advertised to the group
+      --mgr-port PORT         XCom port (default: 33061; not the SQL port)
+      --mgr-seeds LIST        Comma-separated XCom addresses for all members
+      --mgr-group-name UUID   UUID shared by every member in this group
+      --mgr-allowlist LIST    Comma-separated trusted IP/CIDR entries
+      --mgr-bootstrap         Bootstrap the group on this member only
+      --mgr-recovery-user USER
+                              Recovery account (default: aim_mgr)
+      --mgr-recovery-password PASS
+                              Same recovery password on every member
 
 Paths and package:
   -c, --config FILE           Optional shell config (default: etc/config)
@@ -99,6 +119,10 @@ Examples:
   sudo $0 -v 8.0.42 -p 3306 --role source --replica-host 10.0.0.12
   sudo $0 -v 8.0.42 -p 3306 --role replica --source-host 10.0.0.11 \\
       --source-password 'secret'
+  sudo $0 -v 8.0.46 -p 8046 --role mgr --server-id 101 --mgr-local-address 10.0.0.11 \\
+      --mgr-seeds '10.0.0.11:33061,10.0.0.12:33061,10.0.0.13:33061' \\
+      --mgr-group-name 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' --mgr-allowlist '10.0.0.0/24' \\
+      --mgr-bootstrap --mgr-recovery-password 'same-secret-on-all-members'
 EOF
 }
 
@@ -181,6 +205,7 @@ apply_secret_environment() {
     [[ -z "${AIM_ROOT_PASSWORD:-}" ]] || ROOT_PASSWORD="$AIM_ROOT_PASSWORD"
     [[ -z "${AIM_REPL_PASSWORD:-}" ]] || REPL_PASSWORD="$AIM_REPL_PASSWORD"
     [[ -z "${AIM_SOURCE_PASSWORD:-}" ]] || SOURCE_PASSWORD="$AIM_SOURCE_PASSWORD"
+    [[ -z "${AIM_MGR_RECOVERY_PASSWORD:-}" ]] || MGR_RECOVERY_PASSWORD="$AIM_MGR_RECOVERY_PASSWORD"
 }
 
 need_arg() { [[ $# -ge 2 && -n "$2" ]] || die "option $1 requires a value"; }
@@ -208,6 +233,14 @@ parse_args() {
             --source-port) need_arg "$@"; SOURCE_PORT="$2"; shift 2 ;;
             --source-user) need_arg "$@"; SOURCE_USER="$2"; shift 2 ;;
             --source-password) need_arg "$@"; SOURCE_PASSWORD="$2"; shift 2 ;;
+            --mgr-local-address|--mgr-local-ip) need_arg "$@"; MGR_LOCAL_ADDRESS="$2"; shift 2 ;;
+            --mgr-port) need_arg "$@"; MGR_PORT="$2"; shift 2 ;;
+            --mgr-seeds) need_arg "$@"; MGR_SEEDS="$2"; shift 2 ;;
+            --mgr-group-name) need_arg "$@"; MGR_GROUP_NAME="$2"; shift 2 ;;
+            --mgr-allowlist) need_arg "$@"; MGR_ALLOWLIST="$2"; shift 2 ;;
+            --mgr-bootstrap) MGR_BOOTSTRAP=1; shift ;;
+            --mgr-recovery-user) need_arg "$@"; MGR_RECOVERY_USER="$2"; shift 2 ;;
+            --mgr-recovery-password) need_arg "$@"; MGR_RECOVERY_PASSWORD="$2"; shift 2 ;;
             --base-root) need_arg "$@"; BASE_ROOT="$2"; shift 2 ;;
             --data-root) need_arg "$@"; DATA_ROOT="$2"; shift 2 ;;
             --log-root) need_arg "$@"; LOG_ROOT="$2"; shift 2 ;;
@@ -227,27 +260,64 @@ parse_args() {
 }
 
 validate_inputs() {
-    local root_path
+    local root_path seed seed_port
+    local -a seed_entries
     [[ "$VERSION" =~ ^(5\.6|5\.7|8\.0|8\.4)\.[0-9]+$ ]] ||
         die "unsupported version '$VERSION'; expected an exact 5.6.x, 5.7.x, 8.0.x, or 8.4.x version"
     SERIES="${BASH_REMATCH[1]}"
     [[ "$PORT" =~ ^[0-9]+$ ]] || die "invalid port: $PORT"
     [[ "$SOURCE_PORT" =~ ^[0-9]+$ ]] || die "invalid source port: $SOURCE_PORT"
+    [[ "$MGR_PORT" =~ ^[0-9]+$ ]] || die "invalid MGR port: $MGR_PORT"
     PORT=$((10#$PORT))
     SOURCE_PORT=$((10#$SOURCE_PORT))
+    MGR_PORT=$((10#$MGR_PORT))
     (( PORT >= 1 && PORT <= 65535 )) || die "invalid port: $PORT"
     (( SOURCE_PORT >= 1 && SOURCE_PORT <= 65535 )) || die "invalid source port: $SOURCE_PORT"
+    (( MGR_PORT >= 1 && MGR_PORT <= 65535 )) || die "invalid MGR port: $MGR_PORT"
     [[ "$ROLE" == master ]] && ROLE="source"
     [[ "$ROLE" == slave ]] && ROLE="replica"
-    [[ "$ROLE" =~ ^(standalone|source|replica)$ ]] || die "role must be standalone, source/master, or replica/slave"
+    [[ "$MGR_BOOTSTRAP" =~ ^[01]$ ]] || die "MGR_BOOTSTRAP must be 0 or 1"
+    [[ "$ROLE" =~ ^(standalone|source|replica|mgr)$ ]] ||
+        die "role must be standalone, source/master, replica/slave, or mgr"
+    if (( MGR_BOOTSTRAP )) && [[ "$ROLE" != mgr ]]; then
+        die "--mgr-bootstrap is valid only with --role mgr"
+    fi
     if [[ "$ROLE" == replica ]]; then
         [[ -n "$SOURCE_HOST" ]] || die "--source-host is required for role=replica"
         [[ -n "$SOURCE_PASSWORD" ]] || die "--source-password is required for role=replica"
         (( GTID )) || die "role=replica currently requires GTID for a consistent, position-free setup"
     fi
+    if [[ "$ROLE" == mgr ]]; then
+        [[ "$SERIES" == 8.0 ]] && version_ge "$VERSION" 8.0.23 ||
+            die "role=mgr requires MySQL 8.0.23 or newer in the 8.0 series"
+        (( GTID )) || die "role=mgr requires GTID"
+        [[ -n "$SERVER_ID" ]] || die "--server-id is required for role=mgr and must be unique in the group"
+        [[ "$MGR_LOCAL_ADDRESS" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid or missing --mgr-local-address"
+        [[ "$MGR_SEEDS" =~ ^[A-Za-z0-9._-]+:[0-9]+(,[A-Za-z0-9._-]+:[0-9]+)*$ ]] ||
+            die "invalid or missing --mgr-seeds; expected host:port,host:port"
+        IFS=',' read -r -a seed_entries <<<"$MGR_SEEDS"
+        for seed in "${seed_entries[@]}"; do
+            seed_port="${seed##*:}"
+            seed_port=$((10#$seed_port))
+            (( seed_port >= 1 && seed_port <= 65535 )) || die "invalid MGR seed port in: $seed"
+        done
+        [[ ",$MGR_SEEDS," == *",${MGR_LOCAL_ADDRESS}:${MGR_PORT},"* ]] ||
+            die "--mgr-seeds must include this member's ${MGR_LOCAL_ADDRESS}:${MGR_PORT} address"
+        [[ "$MGR_GROUP_NAME" =~ ^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$ ]] ||
+            die "invalid or missing --mgr-group-name UUID"
+        [[ "$MGR_ALLOWLIST" =~ ^[A-Za-z0-9._:/,-]+$ ]] || die "invalid or missing --mgr-allowlist"
+        [[ "$MGR_RECOVERY_USER" =~ ^[A-Za-z0-9_]+$ ]] || die "invalid MGR recovery user"
+        [[ -n "$MGR_RECOVERY_PASSWORD" ]] ||
+            die "--mgr-recovery-password or AIM_MGR_RECOVERY_PASSWORD is required for role=mgr"
+        (( MGR_PORT != PORT )) || die "MGR XCom port must be different from the MySQL SQL port"
+    fi
     [[ "$REPL_USER" =~ ^[A-Za-z0-9_]+$ ]] || die "invalid replication user"
     [[ "$SOURCE_USER" =~ ^[A-Za-z0-9_]+$ ]] || die "invalid source user"
     [[ -z "$SERVER_ID" || "$SERVER_ID" =~ ^[0-9]+$ ]] || die "server-id must be numeric"
+    if [[ -n "$SERVER_ID" ]]; then
+        SERVER_ID=$((10#$SERVER_ID))
+        (( SERVER_ID >= 1 && SERVER_ID <= 4294967295 )) || die "server-id must be between 1 and 4294967295"
+    fi
     for root_path in "$BASE_ROOT" "$DATA_ROOT" "$LOG_ROOT" "$TMP_ROOT"; do
         [[ "$root_path" == /* && "$root_path" != / ]] || die "installation roots must be absolute non-root paths: $root_path"
         [[ "/$root_path/" != *"/../"* && "/$root_path/" != *"/./"* ]] ||
@@ -315,14 +385,20 @@ require_root() {
     (( DRY_RUN )) || [[ $EUID -eq 0 ]] || die "run as root (or use --dry-run to validate)"
 }
 
-port_is_listening() {
+tcp_port_is_listening() {
+    local checked_port="$1"
     command -v ss >/dev/null 2>&1 &&
-        ss -ltnH 2>/dev/null | awk '{print $4}' | grep -E "(^|:)$PORT$" >/dev/null
+        ss -ltnH 2>/dev/null | awk '{print $4}' | grep -E "(^|:)${checked_port}$" >/dev/null
 }
+
+port_is_listening() { tcp_port_is_listening "$PORT"; }
 
 check_port_and_paths() {
     if port_is_listening; then
         die "TCP port $PORT is already listening"
+    fi
+    if [[ "$ROLE" == mgr ]] && tcp_port_is_listening "$MGR_PORT"; then
+        die "MGR XCom TCP port $MGR_PORT is already listening"
     fi
     if (( REINITIALIZE && DRY_RUN )); then
         return 0
@@ -601,6 +677,7 @@ memory_megabytes() {
 
 write_config() {
     local memory buffer_pool expire_config role_config gtid_config binlog_format_config updates_option
+    local mgr_config mgr_applier_config
     memory="$(memory_megabytes)"
     buffer_pool=$(( memory * 60 / 100 ))
     (( buffer_pool < 128 )) && buffer_pool=128
@@ -626,6 +703,36 @@ write_config() {
         gtid_config="gtid_mode = ON
 enforce_gtid_consistency = ON
 ${updates_option} = ON"
+    fi
+    mgr_config=""
+    if [[ "$ROLE" == mgr ]]; then
+        if version_ge "$VERSION" 8.0.27; then
+            mgr_applier_config="replica_parallel_workers = 4
+replica_preserve_commit_order = ON"
+        elif version_ge "$VERSION" 8.0.26; then
+            mgr_applier_config="replica_parallel_type = LOGICAL_CLOCK
+replica_parallel_workers = 4
+replica_preserve_commit_order = ON"
+        else
+            mgr_applier_config="slave_parallel_type = LOGICAL_CLOCK
+slave_parallel_workers = 4
+slave_preserve_commit_order = ON"
+        fi
+        mgr_config="plugin_load_add = group_replication.so
+report_host = ${MGR_LOCAL_ADDRESS}
+loose-group_replication_group_name = ${MGR_GROUP_NAME}
+loose-group_replication_start_on_boot = OFF
+loose-group_replication_local_address = ${MGR_LOCAL_ADDRESS}:${MGR_PORT}
+loose-group_replication_group_seeds = ${MGR_SEEDS}
+loose-group_replication_bootstrap_group = OFF
+loose-group_replication_single_primary_mode = ON
+loose-group_replication_enforce_update_everywhere_checks = OFF
+loose-group_replication_ip_allowlist = ${MGR_ALLOWLIST}
+loose-group_replication_recovery_get_public_key = ON
+loose-group_replication_exit_state_action = READ_ONLY
+loose-group_replication_autorejoin_tries = 3
+loose-group_replication_consistency = BEFORE_ON_PRIMARY_FAILOVER
+${mgr_applier_config}"
     fi
 
     run mkdir -p "$(dirname -- "$CNF_FILE")" "$DATADIR" "$LOGDIR/binlog" "$LOGDIR/relaylog" "$TMPDIR_INSTANCE"
@@ -674,6 +781,7 @@ ${binlog_format_config}
 ${expire_config}
 ${gtid_config}
 ${role_config}
+${mgr_config}
 EOF
     chmod 640 "$CNF_FILE"
     chown root:"$MYSQL_GROUP" "$CNF_FILE"
@@ -739,6 +847,10 @@ configure_selinux() {
         semanage fcontext -m -t mysqld_db_t "${TMP_ROOT}(/.*)?"
     semanage port -a -t mysqld_port_t -p tcp "$PORT" 2>/dev/null ||
         semanage port -m -t mysqld_port_t -p tcp "$PORT"
+    if [[ "$ROLE" == mgr ]]; then
+        semanage port -a -t mysqld_port_t -p tcp "$MGR_PORT" 2>/dev/null ||
+            semanage port -m -t mysqld_port_t -p tcp "$MGR_PORT"
+    fi
     restorecon -RF "$DATA_ROOT" "$LOG_ROOT" "$TMP_ROOT"
 }
 
@@ -851,6 +963,55 @@ configure_replica() {
     mysql_root -e "$sql"
 }
 
+configure_mgr() {
+    [[ "$ROLE" == mgr ]] || return 0
+    if (( DRY_RUN )); then
+        if (( MGR_BOOTSTRAP )); then
+            log "would bootstrap MGR group $MGR_GROUP_NAME at ${MGR_LOCAL_ADDRESS}:${MGR_PORT}"
+        else
+            log "would join MGR group $MGR_GROUP_NAME at ${MGR_LOCAL_ADDRESS}:${MGR_PORT}"
+        fi
+        return
+    fi
+
+    local business_tables recovery_user recovery_password member_state="" attempt
+    business_tables="$(mysql_root -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema NOT IN ('mysql','information_schema','performance_schema','sys');")"
+    [[ "$business_tables" == 0 ]] ||
+        die "role=mgr refuses an instance containing business tables; provision a validated consistent snapshot manually"
+
+    recovery_user="$(sql_escape "$MGR_RECOVERY_USER")"
+    recovery_password="$(sql_escape "$MGR_RECOVERY_PASSWORD")"
+    mysql_root <<SQL
+SET SQL_LOG_BIN=0;
+CREATE USER IF NOT EXISTS '${recovery_user}'@'%' IDENTIFIED BY '${recovery_password}';
+GRANT REPLICATION SLAVE, CONNECTION_ADMIN, BACKUP_ADMIN ON *.* TO '${recovery_user}'@'%';
+SET SQL_LOG_BIN=1;
+RESET MASTER;
+CHANGE REPLICATION SOURCE TO SOURCE_USER='${recovery_user}', SOURCE_PASSWORD='${recovery_password}', GET_SOURCE_PUBLIC_KEY=1 FOR CHANNEL 'group_replication_recovery';
+SQL
+    warn "MGR recovery credentials are stored by MySQL in replication metadata; protect the host and MySQL data directory"
+
+    if (( MGR_BOOTSTRAP )); then
+        mysql_root -e "SET GLOBAL group_replication_bootstrap_group=ON;"
+        if ! mysql_root -e "START GROUP_REPLICATION;"; then
+            mysql_root -e "SET GLOBAL group_replication_bootstrap_group=OFF;" || true
+            die "failed to bootstrap MGR; bootstrap mode was disabled again"
+        fi
+        mysql_root -e "SET GLOBAL group_replication_bootstrap_group=OFF;"
+    else
+        mysql_root -e "START GROUP_REPLICATION;"
+    fi
+
+    for attempt in {1..60}; do
+        member_state="$(mysql_root -e "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_ID=@@server_uuid;" || true)"
+        [[ "$member_state" == ONLINE ]] && break
+        sleep 2
+    done
+    [[ "$member_state" == ONLINE ]] || die "MGR member did not become ONLINE within 120 seconds (state: ${member_state:-missing})"
+    mysql_root -e "SET PERSIST group_replication_start_on_boot=ON;"
+    mysql_root -e "SELECT MEMBER_HOST, MEMBER_PORT, MEMBER_STATE, MEMBER_ROLE, MEMBER_VERSION FROM performance_schema.replication_group_members ORDER BY MEMBER_HOST;"
+}
+
 verify_installation() {
     (( DRY_RUN )) && { log "validation completed; no host changes were made"; return; }
     local actual
@@ -858,6 +1019,10 @@ verify_installation() {
     [[ "$actual" == "$VERSION"* ]] || die "running server version mismatch: $actual"
     if [[ "$ROLE" == replica ]]; then
         if version_ge "$VERSION" 8.0.23; then mysql_root -e 'SHOW REPLICA STATUS\G'; else mysql_root -e 'SHOW SLAVE STATUS\G'; fi
+    fi
+    if [[ "$ROLE" == mgr ]]; then
+        [[ "$(mysql_root -e "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_ID=@@server_uuid;")" == ONLINE ]] ||
+            die "MGR verification failed: local member is not ONLINE"
     fi
     log "MySQL $actual is running on port $PORT"
 }
@@ -877,7 +1042,16 @@ EOF
     if (( ! DRY_RUN )); then
         printf '  root password: %s\n' "$ROOT_PASSWORD"
         [[ "$ROLE" == source ]] && printf '  replication:  %s / %s\n' "$REPL_USER" "$REPL_PASSWORD"
-        warn "store the displayed credentials now; AIM does not write them to disk"
+        if [[ "$ROLE" == mgr ]]; then
+            printf '  MGR group:     %s\n' "$MGR_GROUP_NAME"
+            printf '  MGR address:   %s:%s\n' "$MGR_LOCAL_ADDRESS" "$MGR_PORT"
+            printf '  MGR mode:      %s\n' "$([[ "$MGR_BOOTSTRAP" == 1 ]] && printf bootstrap || printf join)"
+        fi
+        if [[ "$ROLE" == mgr ]]; then
+            warn "store the root password now; MySQL persists the MGR recovery credential in replication metadata"
+        else
+            warn "store the displayed credentials now; AIM does not write them to disk"
+        fi
     fi
 }
 
@@ -913,6 +1087,7 @@ main() {
     secure_root
     configure_source
     configure_replica
+    configure_mgr
     verify_installation
     summary
 }

@@ -1,8 +1,8 @@
 # AIM defaults. Command-line options override values in this file.
 # Keep credentials out of version control; use --root-password,
-# --repl-password and --source-password at invocation time.
+# --repl-password, --source-password and --mgr-recovery-password at invocation time.
 
-ROLE="standalone"              # standalone | source | replica
+ROLE="standalone"              # standalone | source | replica | mgr
 BASE_ROOT="/opt/mysql"
 DATA_ROOT="/data/mysql"
 LOG_ROOT="/var/log/mysql"
@@ -16,3 +16,14 @@ GTID=1
 # SOURCE_PORT="3306"
 # REPL_USER="aim_repl"
 # SOURCE_USER="aim_repl"
+
+# MGR example (MySQL 8.0.23+; every member needs a unique SERVER_ID):
+# SERVER_ID="101"
+# MGR_LOCAL_ADDRESS="10.0.0.11"
+# MGR_PORT="33061"
+# MGR_SEEDS="10.0.0.11:33061,10.0.0.12:33061,10.0.0.13:33061"
+# MGR_GROUP_NAME="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+# MGR_ALLOWLIST="10.0.0.0/24"
+# MGR_BOOTSTRAP=0              # set to 1 on exactly one member, for first bootstrap only
+# MGR_RECOVERY_USER="aim_mgr"
+# Use AIM_MGR_RECOVERY_PASSWORD for the shared secret; do not commit it here.

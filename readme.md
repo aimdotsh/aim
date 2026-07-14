@@ -1,6 +1,6 @@
 # AIM
 
-`aim.sh` 使用 Oracle MySQL Community Server 官方通用二进制包，在一台 Linux 主机上安装相互隔离的 MySQL 实例。支持单机、主库和 GTID 从库。
+`aim.sh` 使用 Oracle MySQL Community Server 官方通用二进制包，在一台 Linux 主机上安装相互隔离的 MySQL 实例。支持单机、主库、GTID 从库，以及 MySQL 8.0 单主模式 MGR。
 
 ## 支持范围
 
@@ -35,7 +35,7 @@ sudo ./aim.sh -v 8.0.42 -p 3306 --role replica \
   --source-user aim_repl --source-password 'replace-me'
 ```
 
-没有传入 root 或复制密码时，脚本会生成高强度随机密码，只在安装结束时显示，不写入磁盘。自动化环境建议通过 `AIM_ROOT_PASSWORD`、`AIM_REPL_PASSWORD`、`AIM_SOURCE_PASSWORD` 环境变量从秘密管理系统注入；命令行密码参数可能被本机进程列表或 shell history 看见。优先级为命令行、环境变量、配置文件、内置默认值。
+没有传入 root 或普通主从复制密码时，脚本会生成高强度随机密码，只在安装结束时显示。自动化环境建议通过 `AIM_ROOT_PASSWORD`、`AIM_REPL_PASSWORD`、`AIM_SOURCE_PASSWORD`、`AIM_MGR_RECOVERY_PASSWORD` 环境变量从秘密管理系统注入；命令行密码参数可能被本机进程列表或 shell history 看见。优先级为命令行、环境变量、配置文件、内置默认值。MGR 为了重启后能自动恢复，会按 MySQL 机制把恢复账号凭据保存在复制元数据中，因此必须保护数据目录、主机账号和备份。
 
 ## 安装包
 
@@ -146,6 +146,86 @@ sudo ./aim.sh -v 8.0.46 -p 8046 --reinitialize --yes
 3. 从库安装结束时会输出 `SHOW SLAVE STATUS\G` 或 `SHOW REPLICA STATUS\G`。
 
 如果主库已经包含业务数据，必须先使用经过验证的物理备份、Clone Plugin 或逻辑备份建立一致性基线，再配置复制；本脚本不会冒险自动搬迁已有数据。
+
+## 三节点 MGR
+
+`--role mgr` 面向 MySQL 8.0.23 及以上版本，创建单主模式 Group Replication。每个成员必须显式指定唯一 `--server-id`、本机 XCom 地址、全部种子地址、共同的组 UUID、IP 白名单和共同的恢复密码。`--mgr-port` 默认是 `33061`，不能与 SQL 端口相同。
+
+自动流程只接受由 AIM 新初始化的空实例：脚本在启动 MGR 前检查没有业务表，并清除初始化期间产生的本地 GTID，避免成员带着互不相同的游离事务入组。已有业务数据不能使用该自动流程，必须先建立经过验证的一致性副本。
+
+下面是端口 `8046` 的三节点配置：
+
+| 主机 | 地址 | `server_id` | MGR 动作 |
+|---|---|---:|---|
+| dbmp-kingbase-184 | 172.20.23.184 | 101 | bootstrap，且仅执行一次 |
+| node01 | 172.20.23.95 | 8118432 | join |
+| node02 | 172.20.23.96 | 103 | join |
+
+先确保三台之间 TCP `8046` 和 `33061` 双向互通，并在三台分别设置秘密。恢复密码必须完全相同；root 密码可以不同：
+
+```bash
+export AIM_ROOT_PASSWORD='replace-with-root-password'
+export AIM_MGR_RECOVERY_PASSWORD='replace-with-one-shared-recovery-password'
+```
+
+以下命令中的 `--reinitialize --yes` 会永久删除端口 `8046` 的现有数据、配置和日志，仅适用于这三台刚安装且确认无业务数据的实例。先在每台机器停止实例，并用 `--dry-run` 预览删除范围：
+
+```bash
+sudo systemctl stop aim-mysql-8046
+sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 101 \
+  --mgr-local-address 172.20.23.184 \
+  --mgr-seeds '172.20.23.184:33061,172.20.23.95:33061,172.20.23.96:33061' \
+  --mgr-group-name 'b32b3ad1-031b-4c53-bfd4-1ea75424021a' \
+  --mgr-allowlist '172.20.23.0/24' --mgr-bootstrap \
+  --reinitialize --dry-run
+```
+
+确认预览后，严格按下面顺序执行；必须等待前一台输出 `ONLINE` 后再执行下一台。
+
+第一台 `172.20.23.184` 负责且仅负责首次 bootstrap：
+
+```bash
+sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 101 \
+  --mgr-local-address 172.20.23.184 \
+  --mgr-seeds '172.20.23.184:33061,172.20.23.95:33061,172.20.23.96:33061' \
+  --mgr-group-name 'b32b3ad1-031b-4c53-bfd4-1ea75424021a' \
+  --mgr-allowlist '172.20.23.0/24' --mgr-bootstrap \
+  --reinitialize --yes
+```
+
+第二台 `172.20.23.95` 加入组，不能带 `--mgr-bootstrap`：
+
+```bash
+sudo systemctl stop aim-mysql-8046
+sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 8118432 \
+  --mgr-local-address 172.20.23.95 \
+  --mgr-seeds '172.20.23.184:33061,172.20.23.95:33061,172.20.23.96:33061' \
+  --mgr-group-name 'b32b3ad1-031b-4c53-bfd4-1ea75424021a' \
+  --mgr-allowlist '172.20.23.0/24' \
+  --reinitialize --yes
+```
+
+第三台 `172.20.23.96` 最后加入，同样不能带 `--mgr-bootstrap`：
+
+```bash
+sudo systemctl stop aim-mysql-8046
+sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 103 \
+  --mgr-local-address 172.20.23.96 \
+  --mgr-seeds '172.20.23.184:33061,172.20.23.95:33061,172.20.23.96:33061' \
+  --mgr-group-name 'b32b3ad1-031b-4c53-bfd4-1ea75424021a' \
+  --mgr-allowlist '172.20.23.0/24' \
+  --reinitialize --yes
+```
+
+任意成员上验证状态：
+
+```sql
+SELECT MEMBER_HOST, MEMBER_PORT, MEMBER_STATE, MEMBER_ROLE, MEMBER_VERSION
+FROM performance_schema.replication_group_members
+ORDER BY MEMBER_HOST;
+```
+
+正常结果应有三个 `ONLINE` 成员，只有一个 `PRIMARY`。安装成功后脚本持久化 `group_replication_start_on_boot=ON`；日常重启不能再次使用 `--mgr-bootstrap`。仅在整个组完全丢失且确认没有任何成员仍在线时，才可按 MGR 灾难恢复流程选定唯一成员重新引导，不能同时在多台 bootstrap。
 
 ## 设计上的安全改进
 
