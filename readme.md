@@ -164,8 +164,8 @@ sudo ./aim.sh -v 8.0.46 -p 8046 --reinitialize --yes
 先确保三台之间 TCP `8046` 和 `33061` 双向互通，并在三台分别设置秘密。恢复密码必须完全相同；root 密码可以不同：
 
 ```bash
-export AIM_ROOT_PASSWORD='replace-with-root-password'
-export AIM_MGR_RECOVERY_PASSWORD='replace-with-one-shared-recovery-password'
+export AIM_ROOT_PASSWORD='rpoT-wi1-password'
+export AIM_MGR_RECOVERY_PASSWORD='mgR-A123overy-password'
 ```
 
 以下命令中的 `--reinitialize --yes` 会永久删除端口 `8046` 的现有数据、配置和日志，仅适用于这三台刚安装且确认无业务数据的实例。先在每台机器停止实例，并用 `--dry-run` 预览删除范围：
