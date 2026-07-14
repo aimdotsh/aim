@@ -113,6 +113,18 @@ sudo AIM_ROOT_PASSWORD='your-password' ./unaim.sh -v 8.4.5 -p 3306 --yes
 
 配置优先级为：命令行参数 > `AIM_*` 密码环境变量 > 配置文件 > 内置默认值。推荐先执行 `--dry-run`，确认系统识别、安装包名称和目录规划符合预期后再正式安装。
 
+如果旧版 AIM 首次安装时出现 `Failed to set datadir ... errno: 13 - Permission denied`，先清理失败实例并修复默认根目录的穿越权限，再重试：
+
+```bash
+sudo ./unaim.sh -v 8.0.46 -p 8046 --yes
+sudo chmod 0755 /data /data/mysql /opt/mysql \
+  /var/log/mysql /var/tmp/mysql
+namei -l /data/mysql/8046/data
+sudo ./aim.sh -v 8.0.46 -p 8046
+```
+
+新版 AIM 会以可穿越权限创建缺失的安装根目录，并在初始化前以 `mysql` 用户实际写入数据、日志和临时目录；权限或 SELinux 仍不兼容时，会输出具体目录层级后退出。
+
 ## 主从约束
 
 自动主从流程面向“一主一从均为新建空实例”的场景，默认启用 GTID，不再配置 SSH 免密或远程使用 root。步骤是：

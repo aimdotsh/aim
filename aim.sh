@@ -317,6 +317,27 @@ check_port_and_paths() {
     [[ ! -e "$CNF_FILE" ]] || die "configuration already exists: $CNF_FILE"
 }
 
+prepare_install_roots() {
+    local root current
+    local -a created=()
+    for root in "$BASE_ROOT" "$DATA_ROOT" "$LOG_ROOT" "$TMP_ROOT"; do
+        [[ ! -e "$root" || -d "$root" ]] || die "installation root is not a directory: $root"
+        current="$root"
+        while [[ "$current" != / && ! -e "$current" ]]; do
+            created+=("$current")
+            current="$(dirname -- "$current")"
+        done
+        run mkdir -p "$root"
+    done
+    if (( DRY_RUN )); then
+        log "would make newly created installation roots traversable"
+        return
+    fi
+    for current in "${created[@]}"; do
+        chmod 0755 "$current"
+    done
+}
+
 install_dependencies() {
     local manager aio_package
     (( INSTALL_DEPS )) || { log "dependency installation skipped"; return; }
@@ -507,7 +528,7 @@ memory_megabytes() {
 }
 
 write_config() {
-    local memory buffer_pool expire_config role_config gtid_config
+    local memory buffer_pool expire_config role_config gtid_config binlog_format_config updates_option
     memory="$(memory_megabytes)"
     buffer_pool=$(( memory * 60 / 100 ))
     (( buffer_pool < 128 )) && buffer_pool=128
@@ -520,9 +541,19 @@ write_config() {
             role_config+=$'\nsuper_read_only = ON'
         fi
     fi
+    binlog_format_config="binlog_format = ROW"
+    if [[ "$SERIES" =~ ^8\. ]] && version_ge "$VERSION" 8.0.34; then
+        binlog_format_config=""
+    fi
+    updates_option="log_slave_updates"
+    if [[ "$SERIES" =~ ^8\. ]] && version_ge "$VERSION" 8.0.26; then
+        updates_option="log_replica_updates"
+    fi
     gtid_config=""
     if (( GTID )); then
-        gtid_config=$'gtid_mode = ON\nenforce_gtid_consistency = ON\nlog_slave_updates = ON'
+        gtid_config="gtid_mode = ON
+enforce_gtid_consistency = ON
+${updates_option} = ON"
     fi
 
     run mkdir -p "$(dirname -- "$CNF_FILE")" "$DATADIR" "$LOGDIR/binlog" "$LOGDIR/relaylog" "$TMPDIR_INSTANCE"
@@ -567,7 +598,7 @@ innodb_flush_log_at_trx_commit = 1
 sync_binlog = 1
 log_bin = ${LOGDIR}/binlog/mysql-bin
 relay_log = ${LOGDIR}/relaylog/relay-bin
-binlog_format = ROW
+${binlog_format_config}
 ${expire_config}
 ${gtid_config}
 ${role_config}
@@ -637,6 +668,21 @@ configure_selinux() {
     semanage port -a -t mysqld_port_t -p tcp "$PORT" 2>/dev/null ||
         semanage port -m -t mysqld_port_t -p tcp "$PORT"
     restorecon -RF "$DATA_ROOT" "$LOG_ROOT" "$TMP_ROOT"
+}
+
+verify_instance_permissions() {
+    (( DRY_RUN )) && { log "would verify mysql can write data, log, and temporary directories"; return; }
+    local directory probe
+    for directory in "$DATADIR" "$LOGDIR" "$TMPDIR_INSTANCE"; do
+        probe="${directory}/.aim-write-test-$$"
+        if ! runuser -u "$MYSQL_USER" -- touch "$probe" 2>/dev/null; then
+            warn "mysql cannot write to $directory"
+            command -v namei >/dev/null 2>&1 && namei -l "$directory" >&2 || true
+            ls -ldZ "$directory" "$(dirname -- "$directory")" 2>/dev/null >&2 || true
+            die "directory permissions or SELinux context prevent mysql access; fix the path shown above"
+        fi
+        rm -f -- "$probe"
+    done
 }
 
 install_systemd_unit() {
@@ -772,6 +818,7 @@ main() {
     detect_platform
     require_root
     check_port_and_paths
+    prepare_install_roots
     log "installing MySQL $VERSION as $ROLE on port $PORT"
     install_dependencies
     if [[ -x "$BASEDIR/bin/mysqld" ]]; then
@@ -785,6 +832,7 @@ main() {
     write_config
     install_limits
     configure_selinux
+    verify_instance_permissions
     initialize_database
     write_control_scripts
     start_database
