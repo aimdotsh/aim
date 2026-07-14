@@ -282,10 +282,11 @@ detect_platform() {
     case "$(uname -m)" in
         x86_64|amd64) ARCH="x86_64" ;;
         aarch64|arm64) ARCH="aarch64" ;;
+        i386|i486|i586|i686) ARCH="i686" ;;
         *) die "unsupported architecture: $(uname -m)" ;;
     esac
-    if [[ "$ARCH" == aarch64 && "$SERIES" =~ ^5\. ]]; then
-        die "MySQL $SERIES has no supported Oracle generic aarch64 build; use x86_64 or provide a custom compatible package"
+    if [[ "$ARCH" != x86_64 && "$SERIES" =~ ^5\. ]]; then
+        die "MySQL $SERIES is supported by AIM only on x86_64; use a compatible custom package or a 64-bit host"
     fi
     command -v ldd >/dev/null 2>&1 || die "ldd is required"
     ldd_output="$(ldd --version 2>&1)"
@@ -358,6 +359,7 @@ install_dependencies() {
 }
 
 archive_candidates() {
+    local baseline
     case "${SERIES}:${ARCH}" in
         5.6:x86_64)
             if version_ge "$VERSION" 5.6.37; then
@@ -370,8 +372,49 @@ archive_candidates() {
             printf '%s\n' "mysql-${VERSION}-linux-glibc2.12-x86_64.tar.gz"
             printf '%s\n' "mysql-${VERSION}-linux-glibc2.5-x86_64.tar.gz"
             ;;
-        8.*:*) printf '%s\n' "mysql-${VERSION}-linux-glibc2.17-${ARCH}.tar.xz" ;;
+        8.*:*)
+            # Oracle publishes multiple generic builds for newer releases.
+            # Prefer the newest ABI baseline supported by this host, then
+            # fall back to older compatible builds. Prefer compressed media.
+            for baseline in 2.28 2.17; do
+                if [[ "$SERIES" == 8.0 && "$ARCH" == aarch64 && "$baseline" == 2.17 ]] &&
+                    version_ge "$VERSION" 8.0.46; then
+                    continue
+                fi
+                if { [[ -n "$LIBC_VERSION" ]] && version_ge "$LIBC_VERSION" "$baseline"; } ||
+                    { [[ -z "$LIBC_VERSION" ]] && [[ "$baseline" == 2.17 ]]; }; then
+                    printf '%s\n' "mysql-${VERSION}-linux-glibc${baseline}-${ARCH}.tar.xz"
+                    printf '%s\n' "mysql-${VERSION}-linux-glibc${baseline}-${ARCH}.tar"
+                    if [[ "$baseline" == 2.17 && "$ARCH" == x86_64 ]]; then
+                        printf '%s\n' "mysql-${VERSION}-linux-glibc${baseline}-${ARCH}-minimal.tar.xz"
+                        printf '%s\n' "mysql-${VERSION}-linux-glibc${baseline}-${ARCH}-minimal.tar"
+                    fi
+                fi
+            done
+            ;;
     esac
+}
+
+validate_archive_compatibility() {
+    local filename required_libc package_arch
+    filename="$(basename -- "$ARCHIVE")"
+    [[ "$filename" != mysql-test-* ]] ||
+        die "archive $filename is a MySQL test suite, not an installable server package"
+    if [[ "$filename" =~ glibc([0-9]+\.[0-9]+) ]]; then
+        required_libc="${BASH_REMATCH[1]}"
+        if [[ -n "$LIBC_VERSION" ]] && ! version_ge "$LIBC_VERSION" "$required_libc"; then
+            die "archive $filename requires glibc >= $required_libc (host: $LIBC_VERSION)"
+        fi
+    fi
+    case "$filename" in
+        *-x86_64.tar*|*-x86_64-minimal.tar*) package_arch="x86_64" ;;
+        *-aarch64.tar*) package_arch="aarch64" ;;
+        *-i686.tar*) package_arch="i686" ;;
+        *) package_arch="" ;;
+    esac
+    if [[ -n "$package_arch" && "$package_arch" != "$ARCH" ]]; then
+        die "archive architecture is $package_arch, but this host is $ARCH"
+    fi
 }
 
 obtain_archive() {
@@ -448,6 +491,7 @@ extract_mysql() {
     case "$ARCHIVE" in
         *.tar.gz|*.tgz) tar -xzf "$ARCHIVE" --strip-components=1 -C "$BASEDIR" ;;
         *.tar.xz) tar -xJf "$ARCHIVE" --strip-components=1 -C "$BASEDIR" ;;
+        *.tar) tar -xf "$ARCHIVE" --strip-components=1 -C "$BASEDIR" ;;
         *) die "unsupported archive format: $ARCHIVE" ;;
     esac
     [[ -x "$BASEDIR/bin/mysqld" ]] || die "archive does not contain bin/mysqld"
@@ -734,6 +778,7 @@ main() {
         log "an installed binary tree is available; package acquisition is skipped"
     else
         obtain_archive
+        validate_archive_compatibility
     fi
     ensure_mysql_user
     extract_mysql

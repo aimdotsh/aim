@@ -4,14 +4,14 @@
 
 ## 支持范围
 
-| MySQL | x86_64 | ARM64 | 初始化方式 | 复制命令 |
-|---|---:|---:|---|---|
-| 5.6.x | 是 | 否 | `mysql_install_db` | `CHANGE MASTER` / `START SLAVE` |
-| 5.7.x | 是 | 否 | 5.7.6 前使用 `mysql_install_db`，之后使用 `mysqld --initialize-insecure` | `CHANGE MASTER` / `START SLAVE` |
-| 8.0.x | 是 | 是 | `mysqld --initialize-insecure` | 8.0.23 起使用 `CHANGE REPLICATION SOURCE` |
-| 8.4.x | 是 | 是 | `mysqld --initialize-insecure` | `CHANGE REPLICATION SOURCE` / `START REPLICA` |
+| MySQL | x86_64 | i686 | ARM64 | 初始化方式 | 复制命令 |
+|---|---:|---:|---:|---|---|
+| 5.6.x | 是 | 否 | 否 | `mysql_install_db` | `CHANGE MASTER` / `START SLAVE` |
+| 5.7.x | 是 | 否 | 否 | 5.7.6 前使用 `mysql_install_db`，之后使用 `mysqld --initialize-insecure` | `CHANGE MASTER` / `START SLAVE` |
+| 8.0.x | 是 | 是 | 是 | `mysqld --initialize-insecure` | 8.0.23 起使用 `CHANGE REPLICATION SOURCE` |
+| 8.4.x | 是 | 是（以官网实际发布为准） | 是 | `mysqld --initialize-insecure` | `CHANGE REPLICATION SOURCE` / `START REPLICA` |
 
-操作系统支持 RHEL/CentOS/Rocky/AlmaLinux/Oracle Linux、Debian/Ubuntu、SLES/openSUSE 等 glibc Linux。脚本自动识别 `dnf`、`yum`、`apt` 或 `zypper`，并识别 x86_64/aarch64。Alpine 等 musl 系统不能直接运行 Oracle 通用二进制包，因此会在安装前明确退出。
+操作系统支持 RHEL/CentOS/Rocky/AlmaLinux/Oracle Linux、Debian/Ubuntu、SLES/openSUSE 等 glibc Linux。脚本自动识别 `dnf`、`yum`、`apt` 或 `zypper`，并识别 x86_64、i686 和 aarch64。Alpine 等 musl 系统不能直接运行 Oracle 通用二进制包，因此会在安装前明确退出。
 
 在启用 SELinux 的 RHEL 系统上，脚本会为自定义数据、日志、临时目录和非默认 TCP 端口配置持久上下文；缺少管理工具时会安装发行版对应的 policycoreutils 包或给出明确错误。
 
@@ -39,7 +39,27 @@ sudo ./aim.sh -v 8.0.42 -p 3306 --role replica \
 
 ## 安装包
 
-脚本先在 `media/` 查找与版本、CPU 架构匹配的官方包，找不到时依次从 MySQL 当前下载区和官方 Archives 下载。离线安装建议显式指定：
+脚本先检测本机 glibc，再在 `media/` 中查找与版本、glibc 基线和 CPU 架构匹配的官方包，找不到时依次从 MySQL 当前下载区和官方 Archives 下载。对于 MySQL 8.x，本机 glibc 2.28 或更高时优先选择 `glibc2.28` 包，并自动回退到兼容的 `glibc2.17` 包；低于 2.28 时不会误选 2.28 包。
+
+同时支持压缩的 `.tar.xz`、`.tar.gz`/`.tgz` 和未压缩的 `.tar`。例如 glibc 2.28 x86_64 主机会按以下顺序查找：
+
+```text
+mysql-8.0.46-linux-glibc2.28-x86_64.tar.xz
+mysql-8.0.46-linux-glibc2.28-x86_64.tar
+mysql-8.0.46-linux-glibc2.17-x86_64.tar.xz
+mysql-8.0.46-linux-glibc2.17-x86_64.tar
+```
+
+在 glibc 2.17 x86_64 上，如果完整包不可用，还会继续识别：
+
+```text
+mysql-8.0.46-linux-glibc2.17-x86_64-minimal.tar.xz
+mysql-8.0.46-linux-glibc2.17-x86_64-minimal.tar
+```
+
+`mysql-test-*` 是测试套件而不是数据库服务器安装包，AIM 不会把它作为安装介质；显式传入时会在解压前直接拒绝。
+
+离线安装也可以显式指定：
 
 ```bash
 sudo ./aim.sh -v 5.7.44 -p 3307 \
