@@ -1,9 +1,9 @@
 .DS_Store
 aim.conf
 media/*
-aim-console
-aim-executor
-dist/
+/aim-console
+/aim-executor
+/dist/
 !internal/webui/dist/
 !internal/webui/dist/**
 web/node_modules/
