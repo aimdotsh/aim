@@ -31,6 +31,8 @@ GTID=1
 DOWNLOAD=1
 INSTALL_DEPS=1
 DRY_RUN=0
+REINITIALIZE=0
+ASSUME_YES=0
 ARCHIVE=""
 DOWNLOAD_URL=""
 OS_ID=""
@@ -88,6 +90,8 @@ Paths and package:
       --no-download           Do not download when media/ has no archive
       --skip-deps             Do not install OS packages
       --dry-run               Validate and print actions without changing host
+      --reinitialize          Delete and recreate this port's instance data
+      --yes                   Confirm destructive --reinitialize non-interactively
   -h, --help                  Show this help
 
 Examples:
@@ -213,6 +217,8 @@ parse_args() {
             --no-download) DOWNLOAD=0; shift ;;
             --skip-deps) INSTALL_DEPS=0; shift ;;
             --dry-run) DRY_RUN=1; shift ;;
+            --reinitialize|--reinit) REINITIALIZE=1; shift ;;
+            --yes) ASSUME_YES=1; shift ;;
             -h|--help) usage; exit 0 ;;
             --) shift; break ;;
             *) die "unknown option: $1 (use --help)" ;;
@@ -244,6 +250,8 @@ validate_inputs() {
     [[ -z "$SERVER_ID" || "$SERVER_ID" =~ ^[0-9]+$ ]] || die "server-id must be numeric"
     for root_path in "$BASE_ROOT" "$DATA_ROOT" "$LOG_ROOT" "$TMP_ROOT"; do
         [[ "$root_path" == /* && "$root_path" != / ]] || die "installation roots must be absolute non-root paths: $root_path"
+        [[ "/$root_path/" != *"/../"* && "/$root_path/" != *"/./"* ]] ||
+            die "installation roots must not contain . or .. path segments: $root_path"
     done
 
     BASEDIR="${BASEDIR:-${BASE_ROOT}/${VERSION}}"
@@ -307,14 +315,74 @@ require_root() {
     (( DRY_RUN )) || [[ $EUID -eq 0 ]] || die "run as root (or use --dry-run to validate)"
 }
 
+port_is_listening() {
+    command -v ss >/dev/null 2>&1 &&
+        ss -ltnH 2>/dev/null | awk '{print $4}' | grep -E "(^|:)$PORT$" >/dev/null
+}
+
 check_port_and_paths() {
-    if command -v ss >/dev/null 2>&1 && ss -ltnH 2>/dev/null | awk '{print $4}' | grep -E "(^|:)$PORT$" >/dev/null; then
+    if port_is_listening; then
         die "TCP port $PORT is already listening"
     fi
     if [[ -d "$DATADIR" ]] && find "$DATADIR" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
         die "data directory is not empty: $DATADIR"
     fi
     [[ ! -e "$CNF_FILE" ]] || die "configuration already exists: $CNF_FILE"
+}
+
+assert_safe_child_path() {
+    local path="$1" root="$2"
+    [[ -n "$path" && -n "$root" && "$path" != / && "$root" != / && "$path" == "$root/"* ]] ||
+        die "refusing unsafe reinitialize path: $path (expected a child of $root)"
+}
+
+reinitialize_instance() {
+    (( REINITIALIZE )) || return 0
+    local instance_root unit start_script stop_script answer path pid="" has_artifacts=0
+    instance_root="$(dirname -- "$CNF_FILE")"
+    unit="/etc/systemd/system/${SERVICE_NAME}.service"
+    start_script="${BASE_ROOT}/start-${PORT}.sh"
+    stop_script="${BASE_ROOT}/stop-${PORT}.sh"
+
+    assert_safe_child_path "$instance_root" "$DATA_ROOT"
+    assert_safe_child_path "$LOGDIR" "$LOG_ROOT"
+    assert_safe_child_path "$TMPDIR_INSTANCE" "$TMP_ROOT"
+    for path in "$instance_root" "$LOGDIR" "$TMPDIR_INSTANCE" "$unit" "$start_script" "$stop_script"; do
+        [[ ! -e "$path" && ! -L "$path" ]] || has_artifacts=1
+    done
+    (( has_artifacts )) || { log "no existing instance artifacts found for port $PORT; normal initialization will continue"; return; }
+
+    [[ ! -S "$SOCKET" ]] || die "instance socket still exists at $SOCKET; stop MySQL before reinitializing"
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        die "systemd service $SERVICE_NAME is active; stop it before reinitializing"
+    fi
+    if [[ -r "$PID_FILE" ]]; then
+        read -r pid <"$PID_FILE" || true
+        if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+            die "mysqld process $pid is still running; stop it before reinitializing"
+        fi
+    fi
+    port_is_listening && die "TCP port $PORT is still listening; stop the service before reinitializing"
+
+    warn "REINITIALIZE WILL PERMANENTLY DELETE the MySQL instance on port $PORT"
+    printf '[aim] remove: %s %s %s %s %s %s\n' \
+        "$instance_root" "$LOGDIR" "$TMPDIR_INSTANCE" "$unit" "$start_script" "$stop_script"
+    if (( DRY_RUN )); then
+        log "dry-run: reinitialize preview completed; nothing was deleted"
+        return
+    fi
+    if (( ! ASSUME_YES )); then
+        [[ -t 0 ]] || die "reinitialize confirmation requires a terminal; review --dry-run, then pass --yes"
+        read -r -p "Type the port number (${PORT}) to permanently delete this instance: " answer
+        [[ "$answer" == "$PORT" ]] || die "confirmation did not match; instance was not changed"
+    fi
+
+    rm -rf -- "$instance_root" "$LOGDIR" "$TMPDIR_INSTANCE"
+    rm -f -- "$unit" "$start_script" "$stop_script"
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        systemctl daemon-reload
+    fi
+    log "instance artifacts removed; shared binaries and media were retained"
 }
 
 create_directory_0755() {
@@ -818,6 +886,7 @@ main() {
     validate_inputs
     detect_platform
     require_root
+    reinitialize_instance
     check_port_and_paths
     prepare_install_roots
     log "installing MySQL $VERSION as $ROLE on port $PORT"
