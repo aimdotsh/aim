@@ -1,7 +1,0 @@
-# shellcheck shell=bash
-# Deprecated compatibility file.
-#
-# AIM 2.x uses etc/config. Keep host-specific values and all credentials in a
-# private config outside the repository, then pass it with: aim.sh -c FILE ...
-# shellcheck disable=SC1091
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/config"

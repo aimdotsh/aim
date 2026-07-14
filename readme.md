@@ -17,6 +17,26 @@
 
 MySQL 5.6/5.7 已停止官方维护。脚本仍支持安装归档版本，但生产环境应优先选择仍受支持的 8.0/8.4，并自行承担旧版本安全和系统动态库兼容风险。
 
+## 获取脚本
+
+在线安装只需要下载 `aim.sh`，默认参数已经内置，不依赖仓库中的其他文件：
+
+```bash
+wget -O aim.sh \
+  https://raw.githubusercontent.com/aimdotsh/aim/master/aim.sh
+chmod +x aim.sh
+```
+
+需要卸载 AIM 实例时，再单独下载 `unaim.sh`：
+
+```bash
+wget -O unaim.sh \
+  https://raw.githubusercontent.com/aimdotsh/aim/master/unaim.sh
+chmod +x unaim.sh
+```
+
+`etc/config` 只是可选的共享配置示例；不下载它时，`aim.sh` 和 `unaim.sh` 都会使用内置默认值。MySQL 安装包会自动下载到脚本所在目录的 `media/`，也可以提前放入该目录进行离线安装。
+
 ## 快速开始
 
 使用精确的三段版本号：
@@ -235,4 +255,4 @@ ORDER BY MEMBER_HOST;
 - 配置按 5.6/5.7 与 8.x 分支生成，避免向 8.x 写入已删除参数。
 - 不再把操作系统 SSH 密码或数据库密码写进仓库配置。
 
-仓库中的 `auto_ssh*`、`ssh-copy-id`、`my56.cnf`、`my57.cnf`、旧 init 脚本和 `tool/` RPM 仅为 1.x 历史材料；2.x 安装和主从流程不会调用它们。
+仓库只保留当前 2.x 所需内容：`aim.sh` 安装脚本、`unaim.sh` 卸载脚本、可选的 `etc/config`、回归测试和本说明文档。1.x 的 SSH 自动化、旧版配置、SysV init 脚本及 EL6 RPM 已全部移除。
