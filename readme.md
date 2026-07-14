@@ -27,6 +27,8 @@ docker compose up -d --build
 
 默认访问 `https://<控制台IP>:8443`。Caddy 默认使用内部 CA，客户端需信任该 CA，或替换为企业内网证书。完整的控制台、目标机初始化及安全说明见 [Web 控制台部署指南](docs/web-console.md)。
 
+本机访问默认使用 `https://localhost:8443`。从其他电脑通过内网 IP 访问前，需要把该 IP 加入 `.env` 的 `AIM_TLS_HOSTS` 并重新创建 Caddy 容器。
+
 Web 控制台是可选功能；只使用命令行时仍然只需下载一个 `aim.sh`。
 
 ## 支持范围

@@ -34,6 +34,14 @@ chmod 600 secrets/aim_master_key
 
 编辑 `.env`，至少替换 `AIM_ADMIN_PASSWORD`。密码不得少于 12 个字符。初始管理员只会在空数据库首次启动时创建，以后修改 `.env` 不会覆盖已有用户。
 
+默认 `AIM_TLS_HOSTS` 包含 `localhost` 和 `127.0.0.1`。如果还要从其他内网电脑访问，请加入控制台主机的固定 IP，例如：
+
+```dotenv
+AIM_TLS_HOSTS=localhost, 127.0.0.1, 192.168.31.10
+```
+
+浏览器访问的名称或 IP 必须包含在该列表中；修改后需重新创建 Caddy 容器以签发对应站点证书。
+
 ```bash
 docker compose up -d --build
 docker compose ps

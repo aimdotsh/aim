@@ -1,9 +1,9 @@
-:443 {
-    tls internal
-    encode zstd gzip
-    request_body {
-        max_size 2GB
-    }
-    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
-    reverse_proxy console:8080
+{$AIM_TLS_HOSTS:localhost, 127.0.0.1} {
+	tls internal
+	encode zstd gzip
+	request_body {
+		max_size 2GB
+	}
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	reverse_proxy console:8080
 }

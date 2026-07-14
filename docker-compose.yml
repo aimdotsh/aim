@@ -29,6 +29,8 @@ services:
   caddy:
     image: caddy:2.10-alpine
     restart: unless-stopped
+    environment:
+      AIM_TLS_HOSTS: "${AIM_TLS_HOSTS:-localhost, 127.0.0.1}"
     depends_on:
       console:
         condition: service_healthy
