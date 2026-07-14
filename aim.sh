@@ -324,6 +324,9 @@ check_port_and_paths() {
     if port_is_listening; then
         die "TCP port $PORT is already listening"
     fi
+    if (( REINITIALIZE && DRY_RUN )); then
+        return 0
+    fi
     if [[ -d "$DATADIR" ]] && find "$DATADIR" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
         die "data directory is not empty: $DATADIR"
     fi
