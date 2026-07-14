@@ -1,3 +1,14 @@
 .DS_Store
 aim.conf
 media/*
+aim-console
+aim-executor
+dist/
+!internal/webui/dist/
+!internal/webui/dist/**
+web/node_modules/
+.env
+data/
+secrets/
+caddy-data/
+caddy-config/

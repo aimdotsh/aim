@@ -1,0 +1,10 @@
+.git
+.DS_Store
+aim.conf
+media
+data
+secrets
+caddy-data
+caddy-config
+web/node_modules
+dist

@@ -1,0 +1,53 @@
+services:
+  console:
+    build:
+      context: .
+      args:
+        GOPROXY: "${AIM_GOPROXY:-https://proxy.golang.org,direct}"
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      AIM_LISTEN: ":8080"
+      AIM_DATA_DIR: "/var/lib/aim-console"
+      AIM_MASTER_KEY_FILE: "/run/secrets/aim_master_key"
+      AIM_COOKIE_SECURE: "true"
+    secrets:
+      - aim_master_key
+    volumes:
+      - aim-data:/var/lib/aim-console
+    networks:
+      - aim-internal
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/api/v1/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    depends_on:
+      console:
+        condition: service_healthy
+    ports:
+      - "${AIM_HTTPS_PORT:-8443}:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy-data:/data
+      - ./caddy-config:/config
+    networks:
+      - aim-internal
+
+secrets:
+  aim_master_key:
+    file: ./secrets/aim_master_key
+
+networks:
+  aim-internal:
+    driver: bridge
+
+volumes:
+  aim-data:

@@ -4,6 +4,31 @@
 
 ![aim.sh Linux 环境下 MySQL 自动化安装与集群部署架构总览](docs/images/aim-overview.png)
 
+## Web 控制台
+
+AIM 现在同时提供内网 Web 部署控制台。控制台以 Go 单体应用、Vue 3 和 SQLite 实现，通过 SSH 调用目标机上的非常驻受限执行器，可以在网页中：
+
+- 登记主机并自动探测 Linux、CPU、glibc、IPv4、内存、磁盘和端口。
+- 以 16 MiB 分块断点上传最大 2 GiB 的 MySQL 安装包，并校验 SHA-256。
+- 部署单机、主库、从库、一主一从和固定三节点 MGR。
+- 查看实时任务日志，管理实例启停、重新初始化和卸载。
+- 使用本地 RBAC、SSH 指纹固定、AES-256-GCM 密码保险箱和审计日志。
+
+快速启动控制台：
+
+```bash
+cp .env.sample .env
+mkdir -p secrets
+openssl rand -base64 32 > secrets/aim_master_key
+chmod 600 secrets/aim_master_key
+# 先修改 .env 中的初始管理员密码
+docker compose up -d --build
+```
+
+默认访问 `https://<控制台IP>:8443`。Caddy 默认使用内部 CA，客户端需信任该 CA，或替换为企业内网证书。完整的控制台、目标机初始化及安全说明见 [Web 控制台部署指南](docs/web-console.md)。
+
+Web 控制台是可选功能；只使用命令行时仍然只需下载一个 `aim.sh`。
+
 ## 支持范围
 
 | MySQL | x86_64 | i686 | ARM64 | 初始化方式 | 复制命令 |
@@ -132,6 +157,16 @@ sudo AIM_ROOT_PASSWORD='your-password' ./aim.sh --uninstall -v 8.4.5 -p 3306 --y
 ```bash
 ./aim.sh --help
 ```
+
+自动化系统可以直接使用实例生命周期接口，并用固定 JSON 结果判断状态：
+
+```bash
+sudo ./aim.sh --status -v 8.0.46 -p 8046 --machine-readable --no-print-secrets
+sudo ./aim.sh --stop   -v 8.0.46 -p 8046 --machine-readable --no-print-secrets
+sudo ./aim.sh --start  -v 8.0.46 -p 8046 --machine-readable --no-print-secrets
+```
+
+最后一行固定包含 `ok/action/version/role/port/service/state/paths/error_code`，不包含任何密码；失败仍返回非零退出码。`--no-print-secrets` 也可用于安装、重新初始化和卸载。
 
 在目标 Linux 上仅检查版本、端口、系统、架构、下载包选择和将执行的动作：
 

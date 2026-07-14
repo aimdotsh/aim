@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 umask 027
 
-readonly AIM_VERSION="2.2.0"
+readonly AIM_VERSION="2.3.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 VERSION=""
@@ -35,6 +35,11 @@ DRY_RUN=0
 REINITIALIZE=0
 ASSUME_YES=0
 UNINSTALL=0
+ACTION="install"
+ACTION_COUNT=0
+MACHINE_READABLE=0
+PRINT_SECRETS=1
+MACHINE_ERROR_EMITTED=0
 MGR_LOCAL_ADDRESS=""
 MGR_PORT="33061"
 MGR_SEEDS=""
@@ -68,6 +73,7 @@ AIM ${AIM_VERSION} - MySQL 5.6/5.7/8.0/8.4 lifecycle manager
 Usage:
   sudo $0 -v VERSION [-p PORT] [options]
   sudo $0 --uninstall -v VERSION -p PORT [--dry-run|--yes]
+  sudo $0 --status|--start|--stop -v VERSION -p PORT
 
 Required:
   -v, --version VERSION       Exact MySQL version, e.g. 5.7.44, 8.0.42, 8.4.5
@@ -81,6 +87,9 @@ Instance:
       --bind-address ADDRESS  Listen address (default: 0.0.0.0)
       --root-password PASS    Root password (random when omitted)
       --uninstall             Remove one AIM instance; -v and -p are required
+      --status                Show service and port state for one AIM instance
+      --start                 Start one AIM instance
+      --stop                  Stop one AIM instance
 
 Replication:
       --replica-host HOST     Account host used on a source (default: %)
@@ -116,6 +125,8 @@ Paths and package:
       --dry-run               Validate and print actions without changing host
       --reinitialize          Delete and recreate this port's instance data
       --yes                   Confirm destructive reinitialize/uninstall non-interactively
+      --machine-readable      Emit a final JSON result for automation
+      --no-print-secrets      Never print generated or supplied passwords
   -h, --help                  Show this help
 
 Examples:
@@ -133,7 +144,34 @@ EOF
 
 log() { printf '[aim] %s\n' "$*"; }
 warn() { printf '[aim] WARNING: %s\n' "$*" >&2; }
-die() { printf '[aim] ERROR: %s\n' "$*" >&2; exit 1; }
+json_escape() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//$'\n'/\\n}"
+    value="${value//$'\r'/\\r}"
+    value="${value//$'\t'/\\t}"
+    printf '%s' "$value"
+}
+machine_result() {
+    local ok="$1" action="$2" state="$3" error_code="${4:-}"
+    (( MACHINE_READABLE )) || return 0
+    printf '{"ok":%s,"action":"%s","version":"%s","role":"%s","port":%s,"service":"%s","state":"%s","paths":{"basedir":"%s","datadir":"%s","config":"%s","socket":"%s"},"error_code":"%s"}\n' \
+        "$ok" "$(json_escape "$action")" "$(json_escape "${VERSION:-}")" \
+        "$(json_escape "${ROLE:-}")" "${PORT:-0}" "$(json_escape "${SERVICE_NAME:-}")" \
+        "$(json_escape "$state")" "$(json_escape "${BASEDIR:-}")" \
+        "$(json_escape "${DATADIR:-}")" "$(json_escape "${CNF_FILE:-}")" \
+        "$(json_escape "${SOCKET:-}")" "$(json_escape "$error_code")"
+}
+die() {
+    local message="$*"
+    printf '[aim] ERROR: %s\n' "$message" >&2
+    if (( MACHINE_READABLE && ! MACHINE_ERROR_EMITTED )); then
+        MACHINE_ERROR_EMITTED=1
+        machine_result false "${ACTION:-unknown}" failed "$message"
+    fi
+    exit 1
+}
 quote_cmd() { printf ' %q' "$@"; printf '\n'; }
 run() {
     if (( DRY_RUN )); then
@@ -146,6 +184,10 @@ run() {
 on_error() {
     local rc=$?
     printf '[aim] ERROR: command failed at line %s (exit %s)\n' "${BASH_LINENO[0]}" "$rc" >&2
+    if (( MACHINE_READABLE && ! MACHINE_ERROR_EMITTED )); then
+        MACHINE_ERROR_EMITTED=1
+        machine_result false "${ACTION:-unknown}" failed "command_failed_${rc}"
+    fi
     exit "$rc"
 }
 trap on_error ERR
@@ -199,6 +241,11 @@ reset_cli_action_flags() {
     REINITIALIZE=0
     ASSUME_YES=0
     UNINSTALL=0
+    ACTION="install"
+    ACTION_COUNT=0
+    MACHINE_READABLE=0
+    PRINT_SECRETS=1
+    MACHINE_ERROR_EMITTED=0
 }
 
 apply_secret_environment() {
@@ -209,6 +256,13 @@ apply_secret_environment() {
 }
 
 need_arg() { [[ $# -ge 2 && -n "$2" ]] || die "option $1 requires a value"; }
+
+set_action() {
+    local requested="$1"
+    ((ACTION_COUNT+=1))
+    (( ACTION_COUNT == 1 )) || die "only one lifecycle action may be specified"
+    ACTION="$requested"
+}
 
 parse_args() {
     while (( $# )); do
@@ -226,7 +280,10 @@ parse_args() {
             --server-id) need_arg "$@"; SERVER_ID="$2"; shift 2 ;;
             --bind-address) need_arg "$@"; BIND_ADDRESS="$2"; shift 2 ;;
             --root-password) need_arg "$@"; ROOT_PASSWORD="$2"; shift 2 ;;
-            --uninstall) UNINSTALL=1; shift ;;
+            --uninstall) set_action uninstall; UNINSTALL=1; shift ;;
+            --status) set_action status; shift ;;
+            --start) set_action start; shift ;;
+            --stop) set_action stop; shift ;;
             --replica-host) need_arg "$@"; REPLICA_HOST="$2"; shift 2 ;;
             --repl-user) need_arg "$@"; REPL_USER="$2"; shift 2 ;;
             --repl-password) need_arg "$@"; REPL_PASSWORD="$2"; shift 2 ;;
@@ -251,13 +308,28 @@ parse_args() {
             --no-download) DOWNLOAD=0; shift ;;
             --skip-deps) INSTALL_DEPS=0; shift ;;
             --dry-run) DRY_RUN=1; shift ;;
-            --reinitialize|--reinit) REINITIALIZE=1; shift ;;
+            --reinitialize|--reinit) set_action reinitialize; REINITIALIZE=1; shift ;;
             --yes) ASSUME_YES=1; shift ;;
+            --machine-readable) MACHINE_READABLE=1; shift ;;
+            --no-print-secrets) PRINT_SECRETS=0; shift ;;
             -h|--help) usage; exit 0 ;;
             --) shift; break ;;
             *) die "unknown option: $1 (use --help)" ;;
         esac
     done
+}
+
+derive_instance_paths() {
+    BASEDIR="${BASEDIR:-${BASE_ROOT}/${VERSION}}"
+    DATADIR="${DATADIR:-${DATA_ROOT}/${PORT}/data}"
+    LOGDIR="${LOGDIR:-${LOG_ROOT}/${PORT}}"
+    TMPDIR_INSTANCE="${TMPDIR_INSTANCE:-${TMP_ROOT}/${PORT}}"
+    CNF_FILE="${CNF_FILE:-${DATA_ROOT}/${PORT}/my.cnf}"
+    SOCKET="${SOCKET:-${DATA_ROOT}/${PORT}/mysql.sock}"
+    PID_FILE="${PID_FILE:-${DATA_ROOT}/${PORT}/mysql.pid}"
+    SERVICE_NAME="aim-mysql-${PORT}"
+    MYSQL="${BASEDIR}/bin/mysql"
+    MYSQLADMIN="${BASEDIR}/bin/mysqladmin"
 }
 
 validate_inputs() {
@@ -326,16 +398,7 @@ validate_inputs() {
             die "installation roots must not contain . or .. path segments: $root_path"
     done
 
-    BASEDIR="${BASEDIR:-${BASE_ROOT}/${VERSION}}"
-    DATADIR="${DATADIR:-${DATA_ROOT}/${PORT}/data}"
-    LOGDIR="${LOGDIR:-${LOG_ROOT}/${PORT}}"
-    TMPDIR_INSTANCE="${TMPDIR_INSTANCE:-${TMP_ROOT}/${PORT}}"
-    CNF_FILE="${CNF_FILE:-${DATA_ROOT}/${PORT}/my.cnf}"
-    SOCKET="${SOCKET:-${DATA_ROOT}/${PORT}/mysql.sock}"
-    PID_FILE="${PID_FILE:-${DATA_ROOT}/${PORT}/mysql.pid}"
-    SERVICE_NAME="aim-mysql-${PORT}"
-    MYSQL="${BASEDIR}/bin/mysql"
-    MYSQLADMIN="${BASEDIR}/bin/mysqladmin"
+    derive_instance_paths
     [[ -n "$SERVER_ID" ]] || SERVER_ID="$(( (PORT * 1009 + 17) % 4294967294 + 1 ))"
 }
 
@@ -394,6 +457,94 @@ tcp_port_is_listening() {
 }
 
 port_is_listening() { tcp_port_is_listening "$PORT"; }
+
+validate_lifecycle_inputs() {
+    local root_path
+    [[ "$VERSION" =~ ^(5\.6|5\.7|8\.0|8\.4)\.[0-9]+$ ]] ||
+        die "lifecycle actions require an exact supported version"
+    (( PORT_EXPLICIT )) || die "--${ACTION} requires an explicit -p/--port"
+    [[ "$PORT" =~ ^[0-9]+$ ]] || die "invalid port: $PORT"
+    PORT=$((10#$PORT))
+    (( PORT >= 1 && PORT <= 65535 )) || die "invalid port: $PORT"
+    for root_path in "$BASE_ROOT" "$DATA_ROOT" "$LOG_ROOT" "$TMP_ROOT"; do
+        [[ "$root_path" == /* && "$root_path" != / ]] ||
+            die "installation roots must be absolute non-root paths: $root_path"
+        [[ "/$root_path/" != *"/../"* && "/$root_path/" != *"/./"* ]] ||
+            die "installation roots must not contain . or .. path segments: $root_path"
+    done
+    derive_instance_paths
+    require_root
+}
+
+instance_state() {
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]] &&
+        systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        printf 'running'
+    elif port_is_listening; then
+        printf 'running-unmanaged'
+    elif [[ -f "$CNF_FILE" ]]; then
+        printf 'stopped'
+    else
+        printf 'missing'
+    fi
+}
+
+manage_instance_lifecycle() {
+    validate_lifecycle_inputs
+    local state
+    state="$(instance_state)"
+
+    case "$ACTION" in
+        status)
+            log "instance $PORT state: $state"
+            machine_result true status "$state"
+            ;;
+        start)
+            [[ "$state" != missing ]] || die "no AIM instance configuration found for port $PORT"
+            if [[ "$state" == running || "$state" == running-unmanaged ]]; then
+                log "instance $PORT is already running"
+            elif (( DRY_RUN )); then
+                log "dry-run: would start $SERVICE_NAME"
+                state="preview"
+            elif command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]] &&
+                [[ -f "/etc/systemd/system/${SERVICE_NAME}.service" ]]; then
+                systemctl start "$SERVICE_NAME"
+                state="$(instance_state)"
+            else
+                [[ -x "$BASEDIR/bin/mysqld_safe" ]] || die "mysqld_safe is missing from $BASEDIR"
+                runuser -u "$MYSQL_USER" -- "$BASEDIR/bin/mysqld_safe" --defaults-file="$CNF_FILE" >/dev/null 2>&1 &
+                sleep 2
+                state="$(instance_state)"
+            fi
+            [[ "$state" == running || "$state" == running-unmanaged || "$state" == preview ]] ||
+                die "instance $PORT did not start"
+            log "instance $PORT state: $state"
+            machine_result true start "$state"
+            ;;
+        stop)
+            if [[ "$state" == missing || "$state" == stopped ]]; then
+                log "instance $PORT is already $state"
+            elif (( DRY_RUN )); then
+                log "dry-run: would stop $SERVICE_NAME"
+                state="preview"
+            elif command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]] &&
+                systemctl list-unit-files "${SERVICE_NAME}.service" --no-legend 2>/dev/null | grep -q "$SERVICE_NAME"; then
+                systemctl stop "$SERVICE_NAME"
+                state="$(instance_state)"
+            else
+                [[ -n "$ROOT_PASSWORD" ]] || die "AIM_ROOT_PASSWORD is required to stop a non-systemd instance"
+                [[ -x "$MYSQLADMIN" ]] || die "mysqladmin is missing from $BASEDIR"
+                MYSQL_PWD="$ROOT_PASSWORD" "$MYSQLADMIN" --protocol=socket --socket="$SOCKET" --user=root shutdown
+                state="$(instance_state)"
+            fi
+            [[ "$state" == stopped || "$state" == missing || "$state" == preview ]] ||
+                die "instance $PORT did not stop"
+            log "instance $PORT state: $state"
+            machine_result true stop "$state"
+            ;;
+        *) die "unsupported lifecycle action: $ACTION" ;;
+    esac
+}
 
 check_port_and_paths() {
     if port_is_listening; then
@@ -1142,7 +1293,7 @@ Installation summary
   datadir:       ${DATADIR}
   socket:        ${SOCKET}
 EOF
-    if (( ! DRY_RUN )); then
+    if (( ! DRY_RUN && PRINT_SECRETS )); then
         printf '  root password: %s\n' "$ROOT_PASSWORD"
         [[ "$ROLE" == source ]] && printf '  replication:  %s / %s\n' "$REPL_USER" "$REPL_PASSWORD"
         if [[ "$ROLE" == mgr ]]; then
@@ -1150,12 +1301,19 @@ EOF
             printf '  MGR address:   %s:%s\n' "$MGR_LOCAL_ADDRESS" "$MGR_PORT"
             printf '  MGR mode:      %s\n' "$([[ "$MGR_BOOTSTRAP" == 1 ]] && printf bootstrap || printf join)"
         fi
-        if [[ "$ROLE" == mgr ]]; then
-            warn "store the root password now; MySQL persists the MGR recovery credential in replication metadata"
+    fi
+    if (( ! DRY_RUN )); then
+        if (( PRINT_SECRETS )); then
+            if [[ "$ROLE" == mgr ]]; then
+                warn "store the root password now; MySQL persists the MGR recovery credential in replication metadata"
+            else
+                warn "store the displayed credentials now; AIM does not write them to disk"
+            fi
         else
-            warn "store the displayed credentials now; AIM does not write them to disk"
+            log "credential output was suppressed"
         fi
     fi
+    machine_result true "$ACTION" "$([[ "$DRY_RUN" == 1 ]] && printf preview || printf running)"
 }
 
 main() {
@@ -1166,6 +1324,12 @@ main() {
     parse_args "$@"
     if (( UNINSTALL )); then
         uninstall_instance
+        derive_instance_paths
+        machine_result true uninstall "$([[ "$DRY_RUN" == 1 ]] && printf preview || printf removed)"
+        return
+    fi
+    if [[ "$ACTION" =~ ^(status|start|stop)$ ]]; then
+        manage_instance_lifecycle
         return
     fi
     validate_inputs
