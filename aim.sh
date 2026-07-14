@@ -987,7 +987,7 @@ CREATE USER IF NOT EXISTS '${recovery_user}'@'%' IDENTIFIED BY '${recovery_passw
 GRANT REPLICATION SLAVE, CONNECTION_ADMIN, BACKUP_ADMIN ON *.* TO '${recovery_user}'@'%';
 SET SQL_LOG_BIN=1;
 RESET MASTER;
-CHANGE REPLICATION SOURCE TO SOURCE_USER='${recovery_user}', SOURCE_PASSWORD='${recovery_password}', GET_SOURCE_PUBLIC_KEY=1 FOR CHANNEL 'group_replication_recovery';
+CHANGE REPLICATION SOURCE TO SOURCE_USER='${recovery_user}', SOURCE_PASSWORD='${recovery_password}' FOR CHANNEL 'group_replication_recovery';
 SQL
     warn "MGR recovery credentials are stored by MySQL in replication metadata; protect the host and MySQL data directory"
 
