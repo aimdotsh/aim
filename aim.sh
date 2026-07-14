@@ -630,7 +630,7 @@ EOF
     cat >"$stop_file" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-MYSQL_PWD=\"${MYSQL_ROOT_PASSWORD:?export MYSQL_ROOT_PASSWORD first}\" \\
+MYSQL_PWD="\${MYSQL_ROOT_PASSWORD:?export MYSQL_ROOT_PASSWORD first}" \\
   exec "${MYSQLADMIN}" --protocol=socket --socket="${SOCKET}" --user=root shutdown
 EOF
     chmod 750 "$start_file" "$stop_file"
