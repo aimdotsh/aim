@@ -1,21 +1,18 @@
-verdir=$(echo $ver|awk -F"." '{print $1"."$2}')
-verif7=$(echo $ver|awk -F"." '{print $2}')
-slave=0
-masterip=192.168.56.109
-masterport=5718
-mastersocket=/data/mysql_data/data_5718/mysql.sock
-slaveip=192.168.56.209
-ssl_user=root
-ssl_passwd='password'
-PRE_BASEDIR=/data/mysql
-PRE_LOGDIR=/log/mysql_log
-PRE_DATADIR=/data/mysql_data
-MySQL_Pass=aim.sh
-BASEDIR=$PRE_BASEDIR/mysql${verdir}
-DATADIR=${PRE_DATADIR}/data_${PORT}
-MYSQL_DATADIR=$DATADIR
-MYSQL_HOME=$BASEDIR
-TMPDIR=${PRE_DATADIR}/tmp_${PORT}
-LOGDIR=${PRE_LOGDIR}/log_${PORT}
-socket=$DATADIR/mysql.sock
-gtid=1
+# AIM defaults. Command-line options override values in this file.
+# Keep credentials out of version control; use --root-password,
+# --repl-password and --source-password at invocation time.
+
+ROLE="standalone"              # standalone | source | replica
+BASE_ROOT="/opt/mysql"
+DATA_ROOT="/data/mysql"
+LOG_ROOT="/var/log/mysql"
+TMP_ROOT="/var/tmp/mysql"
+BIND_ADDRESS="0.0.0.0"
+GTID=1
+
+# Replication examples (uncomment only what is needed):
+# REPLICA_HOST="10.0.0.12"     # source role: allowed replica address
+# SOURCE_HOST="10.0.0.11"      # replica role: source address
+# SOURCE_PORT="3306"
+# REPL_USER="aim_repl"
+# SOURCE_USER="aim_repl"

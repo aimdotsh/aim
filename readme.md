@@ -1,118 +1,114 @@
-aim.sh 自动安装 MySQL 5.6／5.7，支持自动配置SLAVE
-===========
-aim.sh(http://aim.sh) 支持 CentOS 6\7 系列的MySQL 5.6\7.x 二进制包自动安装，并且支持自动配置Slave。
+# AIM
 
-用途 
-===========
-* MySQL 自动安装
-* 自动配置 MySQL Slave
+`aim.sh` 使用 Oracle MySQL Community Server 官方通用二进制包，在一台 Linux 主机上安装相互隔离的 MySQL 实例。支持单机、主库和 GTID 从库。
 
-配置说明
-=========
-### etc/config 参数说明:
-```
-slave=0
-masterip=192.168.56.209
-masterport=5718
-mastersocket=/data/mysql_data/data_5718/mysql.sock
-slaveip=192.168.56.209
-ssl_user=root
-ssl_passwd='password'
-PRE_BASEDIR=/data/mysql
-PRE_LOGDIR=/log/mysql_log
-PRE_DATADIR=/data/mysql_data
-MySQL_Pass=aim.sh
-BASEDIR=$PRE_BASEDIR/mysql${verdir}
-DATADIR=${PRE_DATADIR}/data_${PORT}
-MYSQL_DATADIR=$DATADIR
-MYSQL_HOME=$BASEDIR
-TMPDIR=${PRE_DATADIR}/tmp_${PORT}
-LOGDIR=${PRE_LOGDIR}/log_${PORT}
-socket=$DATADIR/mysql.sock
-```
-```txt
-slave=0 #是否为Slave库，0 为否， 1 为是
-masterip=192.168.56.09 #MySQL主库 IP
-masterport=5718 #手动指定 MySQL主库 的端口号，仅slave=1有效
-mastersocket=/data/mysql_data/data_5718/mysql.sock #手动指定 MySQL主库 的 sock 文件，仅slave=1有效
-slaveip=192.168.56.209 #MySQL Slave 库 IP，仅slave=1有效
-ssl_user=root #为了方便配置主从服务器，配置Slave和Master服务器之间免登录的 OS 用户名，通常为root，仅slave=1有效
-ssl_passwd='password' # ssl_user 对应的 OS 密码，仅slave=1有效
-PRE_BASEDIR=/data/mysql #MySQL安装的目录
-PRE_LOGDIR=/log/mysql_log #MySQL日志目录
-PRE_DATADIR=/data/mysql_data # #MySQL数据目录
-BASEDIR=$PRE_BASEDIR/mysql${verdir} #MySQL安装的目录带版本号，eg mysql5.6/5.7
-DATADIR=${PRE_DATADIR}/data_${PORT} #MySQL数据目录带端口号
-MYSQL_DATADIR=$DATADIR
-MYSQL_HOME=$BASEDIR
-TMPDIR=${PRE_DATADIR}/tmp_${PORT} #MySQL tmp 目录带端口号
-LOGDIR=${PRE_LOGDIR}/log_${PORT} #MySQL 日志目录带端口号
-```
-##使用说明
-```
-./aim.sh -v 版本 -p 端口号
-eg:
-./aim.sh -v 5.7.18 -p 5718
-```
-使用说明：
-===
-## aim.sh 软件包 https://github.com/aimdotsh/aim/archive/master.zip
-搭建主库
-===
-```
-cd /root/
-wget -O aim-master.zip https://github.com/aimdotsh/aim/archive/master.zip
-unzip aim-master.zip
-cd aim-master
-#安装 MySQL 主库（Master）：
-chmod +x *.sh
-#修改 etc/config 配置文件中的 slave=0，修改masterip为服务器的 IP 地址，以此 IP 地址确定 service_id
-./aim.sh -v 5.7.18 -p 5718
-```
-##搭建从库
-```
-#安装 MySQL 从库（Slave）：
-#例如软件包复制到 MySQL服务器的 /root/
-unzip aim-master.zip
-cd aim-master
-#修改 etc/config 配置文件中的 slave=1,修改 masterip 为服务器的 IP 地址,修改 slaveip 为 Slave 库的 IP 地址。此两台机器需要配置 ssl 免登录，确保可以互相连接。
-vi aim.sh
-slave=1 #设置slave=1
-masterip=192.168.56.09 #设置MySQL主库 IP
-masterport=5718 #手动指定 MySQL主库 的端口号，仅slave=1有效
-mastersocket=/data/mysql_data/data_5718/mysql.sock #手动指定 MySQL主库 的 sock 文件，仅slave=1有效
-slaveip=192.168.56.209 #MySQL Slave 库 IP，仅slave=1有效
-ssl_user=root #为了方便配置主从服务器，配置Slave和Master服务器之间免登录的 OS 用户名，通常为root，仅slave=1有效
-ssl_passwd='password' # ssl_user 对应的 OS 密码，仅slave=1有效
-#安装Slave
-./aim.sh -v 5.7.18 -p 5718  #建议主从在不同主机上，端口相同。
-```
-##启动关闭数据库
-安装完成之后，MySQL 数据库默认是启动的,会在${BASEDIR} 目录下面生成启动和关闭脚本
-关闭MySQL
-```
-${BASEDIR}/stop_${PORT}.sh
-```
-启动MySQL
-```
-${BASEDIR}/start_${PORT}.sh
-```
-删除aim.sh搭建的数据库
-===
-```
-./unaim.sh -v 5.7.18 -p 5718
-```
-此操作会删除配置文件中指定的数据库文件目录请谨慎。
-##存在的问题
+## 支持范围
 
-===
-在搭建Slave的时候会配置Slave主机到Master主机上面的免登录进行数据库备份。部分主机在配置免登录的时候可能会失败，有的主机会提示输入密码，设置的等待超时时间为60s，如果在60s内手动输入密码即可以解决，但是如果超时了，会导致配置Slave失败。解决方案，执行./unaim.sh 删除安装的数据，重新运行./aim.sh在等待输入密码的时候手动输入密码，或者手动配置免登录,如下：
-手动配置免登录
-```
-./ssh-copy-id Master库的ip地址 #根据提示输入密码，完成免登录配置,如：
-```
-```
-./ssh-copy-id 188.188.188.188
-```
-完成之后继续运行aim.sh即可。
+| MySQL | x86_64 | ARM64 | 初始化方式 | 复制命令 |
+|---|---:|---:|---|---|
+| 5.6.x | 是 | 否 | `mysql_install_db` | `CHANGE MASTER` / `START SLAVE` |
+| 5.7.x | 是 | 否 | 5.7.6 前使用 `mysql_install_db`，之后使用 `mysqld --initialize-insecure` | `CHANGE MASTER` / `START SLAVE` |
+| 8.0.x | 是 | 是 | `mysqld --initialize-insecure` | 8.0.23 起使用 `CHANGE REPLICATION SOURCE` |
+| 8.4.x | 是 | 是 | `mysqld --initialize-insecure` | `CHANGE REPLICATION SOURCE` / `START REPLICA` |
 
+操作系统支持 RHEL/CentOS/Rocky/AlmaLinux/Oracle Linux、Debian/Ubuntu、SLES/openSUSE 等 glibc Linux。脚本自动识别 `dnf`、`yum`、`apt` 或 `zypper`，并识别 x86_64/aarch64。Alpine 等 musl 系统不能直接运行 Oracle 通用二进制包，因此会在安装前明确退出。
+
+在启用 SELinux 的 RHEL 系统上，脚本会为自定义数据、日志、临时目录和非默认 TCP 端口配置持久上下文；缺少管理工具时会安装发行版对应的 policycoreutils 包或给出明确错误。
+
+MySQL 5.6/5.7 已停止官方维护。脚本仍支持安装归档版本，但生产环境应优先选择仍受支持的 8.0/8.4，并自行承担旧版本安全和系统动态库兼容风险。
+
+## 快速开始
+
+使用精确的三段版本号：
+
+```bash
+# 单机
+sudo ./aim.sh -v 8.4.5 -p 3306 --role standalone
+
+# 主库：创建只允许 10.0.0.12 使用的复制账号
+sudo ./aim.sh -v 8.0.42 -p 3306 --role source \
+  --replica-host 10.0.0.12 --repl-password 'replace-me'
+
+# 从库：连接刚安装、尚无业务数据的主库
+sudo ./aim.sh -v 8.0.42 -p 3306 --role replica \
+  --source-host 10.0.0.11 --source-port 3306 \
+  --source-user aim_repl --source-password 'replace-me'
+```
+
+没有传入 root 或复制密码时，脚本会生成高强度随机密码，只在安装结束时显示，不写入磁盘。自动化环境建议通过 `AIM_ROOT_PASSWORD`、`AIM_REPL_PASSWORD`、`AIM_SOURCE_PASSWORD` 环境变量从秘密管理系统注入；命令行密码参数可能被本机进程列表或 shell history 看见。优先级为命令行、环境变量、配置文件、内置默认值。
+
+## 安装包
+
+脚本先在 `media/` 查找与版本、CPU 架构匹配的官方包，找不到时依次从 MySQL 当前下载区和官方 Archives 下载。离线安装建议显式指定：
+
+```bash
+sudo ./aim.sh -v 5.7.44 -p 3307 \
+  --archive /mnt/packages/mysql-5.7.44-linux-glibc2.12-x86_64.tar.gz \
+  --no-download
+```
+
+也可以用 `--download-url URL` 指定企业镜像。脚本解压后会调用 `mysqld --version` 校验包内版本，避免装错软件包。
+
+## 目录与服务
+
+默认目录如下，可用同名参数或 `etc/config` 修改：
+
+```text
+/opt/mysql/<version>       软件目录
+/data/mysql/<port>/data    数据目录
+/data/mysql/<port>/my.cnf  实例配置
+/var/log/mysql/<port>      日志、binlog、relay log
+/var/tmp/mysql/<port>      临时目录
+```
+
+systemd 环境会创建 `aim-mysql-<port>.service` 并立即启用。非 systemd 环境会用 `mysqld_safe` 启动，同时总会在 `/opt/mysql/` 生成 `start-<port>.sh` 和 `stop-<port>.sh`。停止脚本要求先导出密码：
+
+```bash
+export MYSQL_ROOT_PASSWORD='your-password'
+sudo -E /opt/mysql/stop-3306.sh
+```
+
+卸载前先预览，再明确确认。卸载器只删除该端口的实例数据和服务，保留同版本可共享的软件目录及 `media/` 安装包：
+
+```bash
+sudo ./unaim.sh -v 8.4.5 -p 3306 --dry-run
+sudo AIM_ROOT_PASSWORD='your-password' ./unaim.sh -v 8.4.5 -p 3306 --yes
+```
+
+## 配置和检查
+
+查看所有参数：
+
+```bash
+./aim.sh --help
+```
+
+在目标 Linux 上仅检查版本、端口、系统、架构、下载包选择和将执行的动作：
+
+```bash
+./aim.sh -v 8.4.5 -p 3306 --dry-run --skip-deps
+```
+
+配置文件是受信任的 Bash 配置，会被 `source`。不要使用来源不明的配置文件。命令行参数优先于配置文件。
+
+配置优先级为：命令行参数 > `AIM_*` 密码环境变量 > 配置文件 > 内置默认值。推荐先执行 `--dry-run`，确认系统识别、安装包名称和目录规划符合预期后再正式安装。
+
+## 主从约束
+
+自动主从流程面向“一主一从均为新建空实例”的场景，默认启用 GTID，不再配置 SSH 免密或远程使用 root。步骤是：
+
+1. 先用 `--role source` 安装主库并创建复制账号。
+2. 再用 `--role replica` 安装从库并连接主库。
+3. 从库安装结束时会输出 `SHOW SLAVE STATUS\G` 或 `SHOW REPLICA STATUS\G`。
+
+如果主库已经包含业务数据，必须先使用经过验证的物理备份、Clone Plugin 或逻辑备份建立一致性基线，再配置复制；本脚本不会冒险自动搬迁已有数据。
+
+## 设计上的安全改进
+
+- 不覆盖 `/etc/my.cnf`，不同端口实例互不影响。
+- 不修改整个 `/etc/security/limits.conf`，只写独立 drop-in。
+- 安装前检查 root、系统、glibc、架构、端口、目录和包内版本。
+- 配置按 5.6/5.7 与 8.x 分支生成，避免向 8.x 写入已删除参数。
+- 不再把操作系统 SSH 密码或数据库密码写进仓库配置。
+
+仓库中的 `auto_ssh*`、`ssh-copy-id`、`my56.cnf`、`my57.cnf`、旧 init 脚本和 `tool/` RPM 仅为 1.x 历史材料；2.x 安装和主从流程不会调用它们。
