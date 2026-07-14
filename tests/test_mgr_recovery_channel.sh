@@ -10,7 +10,7 @@ ROLE="mgr"
 DRY_RUN=0
 MGR_BOOTSTRAP=1
 MGR_GROUP_NAME="b32b3ad1-031b-4c53-bfd4-1ea75424021a"
-MGR_LOCAL_ADDRESS="172.20.23.184"
+MGR_LOCAL_ADDRESS="172.20.23.90"
 MGR_PORT=33061
 MGR_RECOVERY_USER="aim_mgr"
 MGR_RECOVERY_PASSWORD="shared-test-secret"
@@ -33,7 +33,7 @@ mysql_root() {
     case "${2:-}" in
         *"COUNT(*)"*) printf '0\n' ;;
         *"MEMBER_ID=@@server_uuid"*) printf 'ONLINE\n' ;;
-        *"MEMBER_HOST"*) printf '172.20.23.184\t8046\tONLINE\tPRIMARY\t8.0.46\n' ;;
+        *"MEMBER_HOST"*) printf '172.20.23.90\t8046\tONLINE\tPRIMARY\t8.0.46\n' ;;
     esac
 }
 

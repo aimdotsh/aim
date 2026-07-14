@@ -185,9 +185,9 @@ sudo ./aim.sh -v 8.0.46 -p 8046 --reinitialize --yes
 
 | 主机 | 地址 | `server_id` | MGR 动作 |
 |---|---|---:|---|
-| dbmp-kingbase-184 | 172.20.23.184 | 101 | bootstrap，且仅执行一次 |
-| node01 | 172.20.23.95 | 8118432 | join |
-| node02 | 172.20.23.96 | 103 | join |
+| node00 | 172.20.23.90 | 14690 | bootstrap，且仅执行一次 |
+| node01 | 172.20.23.95 | 14695 | join |
+| node02 | 172.20.23.96 | 14696 | join |
 
 先确保三台之间 TCP `8046` 和 `33061` 双向互通，并在三台分别设置秘密。恢复密码必须完全相同；root 密码可以不同：
 
@@ -200,9 +200,9 @@ export AIM_MGR_RECOVERY_PASSWORD='replace-with-one-shared-recovery-password'
 
 ```bash
 sudo systemctl stop aim-mysql-8046
-sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 101 \
-  --mgr-local-address 172.20.23.184 \
-  --mgr-seeds '172.20.23.184:33061,172.20.23.95:33061,172.20.23.96:33061' \
+sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 14690 \
+  --mgr-local-address 172.20.23.90 \
+  --mgr-seeds '172.20.23.90:33061,172.20.23.95:33061,172.20.23.96:33061' \
   --mgr-group-name 'b32b3ad1-031b-4c53-bfd4-1ea75424021a' \
   --mgr-allowlist '172.20.23.0/24' --mgr-bootstrap \
   --reinitialize --dry-run
@@ -210,12 +210,12 @@ sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 101 \
 
 确认预览后，严格按下面顺序执行；必须等待前一台输出 `ONLINE` 后再执行下一台。
 
-第一台 `172.20.23.184` 负责且仅负责首次 bootstrap：
+第一台 `node00 (172.20.23.90)` 负责且仅负责首次 bootstrap：
 
 ```bash
-sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 101 \
-  --mgr-local-address 172.20.23.184 \
-  --mgr-seeds '172.20.23.184:33061,172.20.23.95:33061,172.20.23.96:33061' \
+sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 14690 \
+  --mgr-local-address 172.20.23.90 \
+  --mgr-seeds '172.20.23.90:33061,172.20.23.95:33061,172.20.23.96:33061' \
   --mgr-group-name 'b32b3ad1-031b-4c53-bfd4-1ea75424021a' \
   --mgr-allowlist '172.20.23.0/24' --mgr-bootstrap \
   --reinitialize --yes
@@ -225,9 +225,9 @@ sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 101 \
 
 ```bash
 sudo systemctl stop aim-mysql-8046
-sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 8118432 \
+sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 14695 \
   --mgr-local-address 172.20.23.95 \
-  --mgr-seeds '172.20.23.184:33061,172.20.23.95:33061,172.20.23.96:33061' \
+  --mgr-seeds '172.20.23.90:33061,172.20.23.95:33061,172.20.23.96:33061' \
   --mgr-group-name 'b32b3ad1-031b-4c53-bfd4-1ea75424021a' \
   --mgr-allowlist '172.20.23.0/24' \
   --reinitialize --yes
@@ -237,9 +237,9 @@ sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 8118432 \
 
 ```bash
 sudo systemctl stop aim-mysql-8046
-sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 103 \
+sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 14696 \
   --mgr-local-address 172.20.23.96 \
-  --mgr-seeds '172.20.23.184:33061,172.20.23.95:33061,172.20.23.96:33061' \
+  --mgr-seeds '172.20.23.90:33061,172.20.23.95:33061,172.20.23.96:33061' \
   --mgr-group-name 'b32b3ad1-031b-4c53-bfd4-1ea75424021a' \
   --mgr-allowlist '172.20.23.0/24' \
   --reinitialize --yes
