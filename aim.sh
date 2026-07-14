@@ -4,13 +4,14 @@
 set -Eeuo pipefail
 umask 027
 
-readonly AIM_VERSION="2.1.0"
+readonly AIM_VERSION="2.2.0"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 VERSION=""
 PORT="3306"
+PORT_EXPLICIT=0
 ROLE="standalone"
-CONFIG_FILE="${SCRIPT_DIR}/etc/config"
+CONFIG_FILE="${SCRIPT_DIR}/aim.conf"
 BASE_ROOT="/opt/mysql"
 DATA_ROOT="/data/mysql"
 LOG_ROOT="/var/log/mysql"
@@ -33,6 +34,7 @@ INSTALL_DEPS=1
 DRY_RUN=0
 REINITIALIZE=0
 ASSUME_YES=0
+UNINSTALL=0
 MGR_LOCAL_ADDRESS=""
 MGR_PORT="33061"
 MGR_SEEDS=""
@@ -61,10 +63,11 @@ MYSQLADMIN=""
 
 usage() {
     cat <<EOF
-AIM ${AIM_VERSION} - MySQL 5.6/5.7/8.0/8.4 installer
+AIM ${AIM_VERSION} - MySQL 5.6/5.7/8.0/8.4 lifecycle manager
 
 Usage:
   sudo $0 -v VERSION [-p PORT] [options]
+  sudo $0 --uninstall -v VERSION -p PORT [--dry-run|--yes]
 
 Required:
   -v, --version VERSION       Exact MySQL version, e.g. 5.7.44, 8.0.42, 8.4.5
@@ -77,6 +80,7 @@ Instance:
       --server-id ID          Replication server_id (derived automatically)
       --bind-address ADDRESS  Listen address (default: 0.0.0.0)
       --root-password PASS    Root password (random when omitted)
+      --uninstall             Remove one AIM instance; -v and -p are required
 
 Replication:
       --replica-host HOST     Account host used on a source (default: %)
@@ -100,7 +104,7 @@ MGR (MySQL 8.0.23+):
                               Same recovery password on every member
 
 Paths and package:
-  -c, --config FILE           Optional shell config (default: etc/config)
+  -c, --config FILE           Optional shell config (default: aim.conf)
       --base-root DIR         Software root (default: /opt/mysql)
       --data-root DIR         Data root (default: /data/mysql)
       --log-root DIR          Log root (default: /var/log/mysql)
@@ -111,7 +115,7 @@ Paths and package:
       --skip-deps             Do not install OS packages
       --dry-run               Validate and print actions without changing host
       --reinitialize          Delete and recreate this port's instance data
-      --yes                   Confirm destructive --reinitialize non-interactively
+      --yes                   Confirm destructive reinitialize/uninstall non-interactively
   -h, --help                  Show this help
 
 Examples:
@@ -123,6 +127,7 @@ Examples:
       --mgr-seeds '10.0.0.11:33061,10.0.0.12:33061,10.0.0.13:33061' \\
       --mgr-group-name 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' --mgr-allowlist '10.0.0.0/24' \\
       --mgr-bootstrap --mgr-recovery-password 'same-secret-on-all-members'
+  sudo $0 --uninstall -v 8.0.46 -p 8046 --dry-run
 EOF
 }
 
@@ -166,16 +171,12 @@ random_password() {
     printf '%s' "$value"
 }
 
-# Read -v/-p/-c early because legacy config files may derive paths from them.
+# Read -c early so the requested trusted config is loaded before normal parsing.
 prescan_args() {
     local index=1 arg
     while (( index <= $# )); do
         arg="${!index}"
         case "$arg" in
-            -v|--version) ((index++)); VERSION="${!index:-}" ;;
-            --version=*) VERSION="${arg#*=}" ;;
-            -p|--port) ((index++)); PORT="${!index:-}" ;;
-            --port=*) PORT="${arg#*=}" ;;
             -c|--config) ((index++)); CONFIG_FILE="${!index:-}" ;;
             --config=*) CONFIG_FILE="${arg#*=}" ;;
         esac
@@ -185,20 +186,19 @@ prescan_args() {
 
 load_config() {
     [[ -f "$CONFIG_FILE" ]] || return 0
-    # The config is a trusted local shell file, retained for backward compatibility.
+    # The config is a trusted local shell file. Copy config.sample to aim.conf.
     # shellcheck disable=SC1090
     source "$CONFIG_FILE"
+}
 
-    VERSION="${VERSION:-${ver:-}}"
-    PORT="${PORT:-3306}"
-    BASE_ROOT="${BASE_ROOT:-${PRE_BASEDIR:-/opt/mysql}}"
-    DATA_ROOT="${DATA_ROOT:-${PRE_DATADIR:-/data/mysql}}"
-    LOG_ROOT="${LOG_ROOT:-${PRE_LOGDIR:-/var/log/mysql}}"
-    ROOT_PASSWORD="${ROOT_PASSWORD:-${MySQL_Pass:-}}"
-    if [[ "${slave:-0}" == 1 && "$ROLE" == standalone ]]; then ROLE="replica"; fi
-    SOURCE_HOST="${SOURCE_HOST:-${masterip:-}}"
-    SOURCE_PORT="${SOURCE_PORT:-${masterport:-3306}}"
-    GTID="${GTID:-${gtid:-1}}"
+reset_cli_action_flags() {
+    # Destructive actions and confirmations must come from this invocation,
+    # never from a sourced configuration file.
+    PORT_EXPLICIT=0
+    DRY_RUN=0
+    REINITIALIZE=0
+    ASSUME_YES=0
+    UNINSTALL=0
 }
 
 apply_secret_environment() {
@@ -215,8 +215,8 @@ parse_args() {
         case "$1" in
             -v|--version) need_arg "$@"; VERSION="$2"; shift 2 ;;
             --version=*) VERSION="${1#*=}"; shift ;;
-            -p|--port) need_arg "$@"; PORT="$2"; shift 2 ;;
-            --port=*) PORT="${1#*=}"; shift ;;
+            -p|--port) need_arg "$@"; PORT="$2"; PORT_EXPLICIT=1; shift 2 ;;
+            --port=*) PORT="${1#*=}"; PORT_EXPLICIT=1; shift ;;
             -c|--config) need_arg "$@"; CONFIG_FILE="$2"; shift 2 ;;
             --config=*) CONFIG_FILE="${1#*=}"; shift ;;
             --role) need_arg "$@"; ROLE="$2"; shift 2 ;;
@@ -226,6 +226,7 @@ parse_args() {
             --server-id) need_arg "$@"; SERVER_ID="$2"; shift 2 ;;
             --bind-address) need_arg "$@"; BIND_ADDRESS="$2"; shift 2 ;;
             --root-password) need_arg "$@"; ROOT_PASSWORD="$2"; shift 2 ;;
+            --uninstall) UNINSTALL=1; shift ;;
             --replica-host) need_arg "$@"; REPLICA_HOST="$2"; shift 2 ;;
             --repl-user) need_arg "$@"; REPL_USER="$2"; shift 2 ;;
             --repl-password) need_arg "$@"; REPL_PASSWORD="$2"; shift 2 ;;
@@ -288,8 +289,9 @@ validate_inputs() {
         (( GTID )) || die "role=replica currently requires GTID for a consistent, position-free setup"
     fi
     if [[ "$ROLE" == mgr ]]; then
-        [[ "$SERIES" == 8.0 ]] && version_ge "$VERSION" 8.0.23 ||
+        if [[ "$SERIES" != 8.0 ]] || ! version_ge "$VERSION" 8.0.23; then
             die "role=mgr requires MySQL 8.0.23 or newer in the 8.0 series"
+        fi
         (( GTID )) || die "role=mgr requires GTID"
         [[ -n "$SERVER_ID" ]] || die "--server-id is required for role=mgr and must be unique in the group"
         [[ "$MGR_LOCAL_ADDRESS" =~ ^[A-Za-z0-9._-]+$ ]] || die "invalid or missing --mgr-local-address"
@@ -409,10 +411,109 @@ check_port_and_paths() {
     [[ ! -e "$CNF_FILE" ]] || die "configuration already exists: $CNF_FILE"
 }
 
+canonicalize_path() {
+    local path="$1" suffix="" parent
+    while [[ ! -e "$path" && ! -L "$path" && "$path" != / ]]; do
+        suffix="/$(basename -- "$path")${suffix}"
+        path="$(dirname -- "$path")"
+    done
+    if [[ -d "$path" ]]; then
+        path="$(cd -P -- "$path" && pwd -P)"
+    else
+        parent="$(cd -P -- "$(dirname -- "$path")" && pwd -P)"
+        path="${parent}/$(basename -- "$path")"
+    fi
+    printf '%s%s' "$path" "$suffix"
+}
+
 assert_safe_child_path() {
-    local path="$1" root="$2"
-    [[ -n "$path" && -n "$root" && "$path" != / && "$root" != / && "$path" == "$root/"* ]] ||
-        die "refusing unsafe reinitialize path: $path (expected a child of $root)"
+    local path="$1" root="$2" canonical_path canonical_root
+    canonical_path="$(canonicalize_path "$path")"
+    canonical_root="$(canonicalize_path "$root")"
+    [[ -n "$canonical_path" && -n "$canonical_root" && "$canonical_path" != / && "$canonical_root" != / &&
+        "$canonical_path" == "$canonical_root/"* ]] ||
+        die "refusing unsafe instance path: $path (expected a child of $root)"
+}
+
+validate_uninstall_inputs() {
+    local root_path
+    [[ "$VERSION" =~ ^(5\.6|5\.7|8\.0|8\.4)\.[0-9]+$ ]] ||
+        die "--uninstall requires an exact supported version"
+    (( PORT_EXPLICIT )) || die "--uninstall requires an explicit -p/--port"
+    [[ "$PORT" =~ ^[0-9]+$ ]] || die "invalid port: $PORT"
+    PORT=$((10#$PORT))
+    (( PORT >= 1 && PORT <= 65535 )) || die "invalid port: $PORT"
+    (( ! REINITIALIZE )) || die "--uninstall cannot be combined with --reinitialize"
+    for root_path in "$BASE_ROOT" "$DATA_ROOT" "$LOG_ROOT" "$TMP_ROOT"; do
+        [[ "$root_path" == /* && "$root_path" != / ]] ||
+            die "installation roots must be absolute non-root paths: $root_path"
+        [[ "/$root_path/" != *"/../"* && "/$root_path/" != *"/./"* ]] ||
+            die "installation roots must not contain . or .. path segments: $root_path"
+    done
+}
+
+uninstall_instance() {
+    validate_uninstall_inputs
+    require_root
+
+    local instance_root="${DATA_ROOT}/${PORT}"
+    local socket="${instance_root}/mysql.sock"
+    local pid_file="${instance_root}/mysql.pid"
+    local logdir="${LOG_ROOT}/${PORT}"
+    local tmpdir="${TMP_ROOT}/${PORT}"
+    local basedir="${BASE_ROOT}/${VERSION}"
+    local service="aim-mysql-${PORT}"
+    local unit="/etc/systemd/system/${service}.service"
+    local start_script="${BASE_ROOT}/start-${PORT}.sh"
+    local stop_script="${BASE_ROOT}/stop-${PORT}.sh"
+    local answer path pid="" has_artifacts=0
+
+    assert_safe_child_path "$instance_root" "$DATA_ROOT"
+    assert_safe_child_path "$logdir" "$LOG_ROOT"
+    assert_safe_child_path "$tmpdir" "$TMP_ROOT"
+    assert_safe_child_path "$start_script" "$BASE_ROOT"
+    assert_safe_child_path "$stop_script" "$BASE_ROOT"
+    for path in "$instance_root" "$logdir" "$tmpdir" "$unit" "$start_script" "$stop_script"; do
+        [[ ! -e "$path" && ! -L "$path" ]] || has_artifacts=1
+    done
+    (( has_artifacts )) || die "no AIM instance artifacts found for port $PORT"
+
+    warn "UNINSTALL WILL PERMANENTLY DELETE the MySQL instance on port $PORT"
+    printf '[aim] remove: %s %s %s %s %s %s\n' \
+        "$instance_root" "$logdir" "$tmpdir" "$unit" "$start_script" "$stop_script"
+    if (( DRY_RUN )); then
+        log "dry-run: uninstall preview completed; nothing was stopped or deleted"
+        return
+    fi
+    if (( ! ASSUME_YES )); then
+        [[ -t 0 ]] || die "uninstall confirmation requires a terminal; review --dry-run, then pass --yes"
+        read -r -p "Type the port number (${PORT}) to permanently uninstall this instance: " answer
+        [[ "$answer" == "$PORT" ]] || die "confirmation did not match; instance was not changed"
+    fi
+
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]] &&
+        { [[ -e "$unit" ]] || systemctl list-unit-files "${service}.service" --no-legend 2>/dev/null | grep -q "$service"; }; then
+        systemctl disable --now "$service"
+    fi
+    if [[ -S "$socket" ]] && port_is_listening; then
+        [[ -n "$ROOT_PASSWORD" ]] || die "instance is still running; set AIM_ROOT_PASSWORD for graceful shutdown"
+        MYSQL_PWD="$ROOT_PASSWORD" "$basedir/bin/mysqladmin" \
+            --protocol=socket --socket="$socket" --user=root shutdown
+    fi
+    port_is_listening && die "port $PORT is still listening after shutdown; refusing deletion"
+    if [[ -r "$pid_file" ]]; then
+        read -r pid <"$pid_file" || true
+        if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+            die "mysqld process $pid is still running; refusing deletion"
+        fi
+    fi
+
+    rm -rf -- "$instance_root" "$logdir" "$tmpdir"
+    rm -f -- "$unit" "$start_script" "$stop_script"
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        systemctl daemon-reload
+    fi
+    log "instance removed; shared binaries, media, and aim.conf were retained"
 }
 
 reinitialize_instance() {
@@ -426,6 +527,8 @@ reinitialize_instance() {
     assert_safe_child_path "$instance_root" "$DATA_ROOT"
     assert_safe_child_path "$LOGDIR" "$LOG_ROOT"
     assert_safe_child_path "$TMPDIR_INSTANCE" "$TMP_ROOT"
+    assert_safe_child_path "$start_script" "$BASE_ROOT"
+    assert_safe_child_path "$stop_script" "$BASE_ROOT"
     for path in "$instance_root" "$LOGDIR" "$TMPDIR_INSTANCE" "$unit" "$start_script" "$stop_script"; do
         [[ ! -e "$path" && ! -L "$path" ]] || has_artifacts=1
     done
@@ -974,7 +1077,7 @@ configure_mgr() {
         return
     fi
 
-    local business_tables recovery_user recovery_password member_state="" attempt
+    local business_tables recovery_user recovery_password member_state="" _attempt
     business_tables="$(mysql_root -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema NOT IN ('mysql','information_schema','performance_schema','sys');")"
     [[ "$business_tables" == 0 ]] ||
         die "role=mgr refuses an instance containing business tables; provision a validated consistent snapshot manually"
@@ -1002,7 +1105,7 @@ SQL
         mysql_root -e "START GROUP_REPLICATION;"
     fi
 
-    for attempt in {1..60}; do
+    for _attempt in {1..60}; do
         member_state="$(mysql_root -e "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_ID=@@server_uuid;" || true)"
         [[ "$member_state" == ONLINE ]] && break
         sleep 2
@@ -1058,8 +1161,13 @@ EOF
 main() {
     prescan_args "$@"
     load_config
+    reset_cli_action_flags
     apply_secret_environment
     parse_args "$@"
+    if (( UNINSTALL )); then
+        uninstall_instance
+        return
+    fi
     validate_inputs
     detect_platform
     require_root

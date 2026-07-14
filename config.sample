@@ -1,4 +1,6 @@
-# AIM defaults. Command-line options override values in this file.
+# Optional AIM configuration sample.
+# Copy this file to aim.conf in the same directory as aim.sh.
+# Command-line options override values in aim.conf.
 # Keep credentials out of version control; use --root-password,
 # --repl-password, --source-password and --mgr-recovery-password at invocation time.
 

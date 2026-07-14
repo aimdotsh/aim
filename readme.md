@@ -27,15 +27,23 @@ wget -O aim.sh \
 chmod +x aim.sh
 ```
 
-需要卸载 AIM 实例时，再单独下载 `unaim.sh`：
+同一个 `aim.sh` 也负责卸载，不需要其他脚本：
 
 ```bash
-wget -O unaim.sh \
-  https://raw.githubusercontent.com/aimdotsh/aim/master/unaim.sh
-chmod +x unaim.sh
+sudo ./aim.sh --uninstall -v 8.0.46 -p 8046 --dry-run
+sudo ./aim.sh --uninstall -v 8.0.46 -p 8046 --yes
 ```
 
-`etc/config` 只是可选的共享配置示例；不下载它时，`aim.sh` 和 `unaim.sh` 都会使用内置默认值。MySQL 安装包会自动下载到脚本所在目录的 `media/`，也可以提前放入该目录进行离线安装。
+配置文件不是必需的。如需固定目录、角色等参数，下载样例并重命名为与脚本同目录的 `aim.conf`，脚本会自动读取：
+
+```bash
+wget -O config.sample \
+  https://raw.githubusercontent.com/aimdotsh/aim/master/config.sample
+cp config.sample aim.conf
+chmod 600 aim.conf
+```
+
+也可以通过 `-c /path/to/custom.conf` 指定其他受信任配置。MySQL 安装包会自动下载到脚本所在目录的 `media/`，也可以提前放入该目录进行离线安装。
 
 ## 快速开始
 
@@ -91,7 +99,7 @@ sudo ./aim.sh -v 5.7.44 -p 3307 \
 
 ## 目录与服务
 
-默认目录如下，可用同名参数或 `etc/config` 修改：
+默认目录如下，可用同名参数或 `aim.conf` 修改：
 
 ```text
 /opt/mysql/<version>       软件目录
@@ -108,11 +116,11 @@ export MYSQL_ROOT_PASSWORD='your-password'
 sudo -E /opt/mysql/stop-3306.sh
 ```
 
-卸载前先预览，再明确确认。卸载器只删除该端口的实例数据和服务，保留同版本可共享的软件目录及 `media/` 安装包：
+卸载前先预览，再明确确认。`--uninstall` 要求显式指定版本和端口，只删除该端口的实例数据和服务，保留同版本可共享的软件目录、`media/` 安装包及 `aim.conf`：
 
 ```bash
-sudo ./unaim.sh -v 8.4.5 -p 3306 --dry-run
-sudo AIM_ROOT_PASSWORD='your-password' ./unaim.sh -v 8.4.5 -p 3306 --yes
+sudo ./aim.sh --uninstall -v 8.4.5 -p 3306 --dry-run
+sudo AIM_ROOT_PASSWORD='your-password' ./aim.sh --uninstall -v 8.4.5 -p 3306 --yes
 ```
 
 ## 配置和检查
@@ -129,14 +137,14 @@ sudo AIM_ROOT_PASSWORD='your-password' ./unaim.sh -v 8.4.5 -p 3306 --yes
 ./aim.sh -v 8.4.5 -p 3306 --dry-run --skip-deps
 ```
 
-配置文件是受信任的 Bash 配置，会被 `source`。不要使用来源不明的配置文件。命令行参数优先于配置文件。
+默认配置文件是与脚本同目录的 `aim.conf`，它是受信任的 Bash 配置并会被 `source`。仓库中的 `config.sample` 不会自动加载，复制为 `aim.conf` 后才生效。不要使用来源不明的配置文件。命令行参数优先于配置文件。
 
 配置优先级为：命令行参数 > `AIM_*` 密码环境变量 > 配置文件 > 内置默认值。推荐先执行 `--dry-run`，确认系统识别、安装包名称和目录规划符合预期后再正式安装。
 
 如果旧版 AIM 首次安装时出现 `Failed to set datadir ... errno: 13 - Permission denied`，先清理失败实例并修复默认根目录的穿越权限，再重试：
 
 ```bash
-sudo ./unaim.sh -v 8.0.46 -p 8046 --yes
+sudo ./aim.sh --uninstall -v 8.0.46 -p 8046 --yes
 sudo chmod 0755 /data /data/mysql /opt/mysql \
   /var/log/mysql /var/tmp/mysql
 namei -l /data/mysql/8046/data
@@ -184,8 +192,8 @@ sudo ./aim.sh -v 8.0.46 -p 8046 --reinitialize --yes
 先确保三台之间 TCP `8046` 和 `33061` 双向互通，并在三台分别设置秘密。恢复密码必须完全相同；root 密码可以不同：
 
 ```bash
-export AIM_ROOT_PASSWORD='rpoT-wi1-password'
-export AIM_MGR_RECOVERY_PASSWORD='mgR-A123overy-password'
+export AIM_ROOT_PASSWORD='replace-with-root-password'
+export AIM_MGR_RECOVERY_PASSWORD='replace-with-one-shared-recovery-password'
 ```
 
 以下命令中的 `--reinitialize --yes` 会永久删除端口 `8046` 的现有数据、配置和日志，仅适用于这三台刚安装且确认无业务数据的实例。先在每台机器停止实例，并用 `--dry-run` 预览删除范围：
@@ -255,4 +263,4 @@ ORDER BY MEMBER_HOST;
 - 配置按 5.6/5.7 与 8.x 分支生成，避免向 8.x 写入已删除参数。
 - 不再把操作系统 SSH 密码或数据库密码写进仓库配置。
 
-仓库只保留当前 2.x 所需内容：`aim.sh` 安装脚本、`unaim.sh` 卸载脚本、可选的 `etc/config`、回归测试和本说明文档。1.x 的 SSH 自动化、旧版配置、SysV init 脚本及 EL6 RPM 已全部移除。
+仓库只保留当前 2.x 所需内容：统一生命周期脚本 `aim.sh`、可选配置模板 `config.sample`、回归测试和本说明文档。`aim.conf` 是本机配置并已加入 `.gitignore`，避免误提交主机路径或凭据。
