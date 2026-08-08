@@ -30,6 +30,7 @@ var jobStateTransitions = map[string]map[string]bool{
 type DeploymentNode struct {
 	HostID     int64  `json:"host_id"`
 	LocalIP    string `json:"local_ip,omitempty"`
+	RouterIP   string `json:"router_ip,omitempty"`
 	ServerID   uint32 `json:"server_id,omitempty"`
 	RootSecret int64  `json:"root_secret_id,omitempty"`
 }
@@ -50,13 +51,19 @@ type DeploymentRequest struct {
 	MGRGroupName        string           `json:"mgr_group_name,omitempty"`
 	MGRAllowlist        string           `json:"mgr_allowlist,omitempty"`
 	MGRRecoveryUser     string           `json:"mgr_recovery_user,omitempty"`
+	DeployRouter        bool             `json:"deploy_router,omitempty"`
+	RouterRWPort        int              `json:"router_rw_port,omitempty"`
+	RouterClusterName   string           `json:"router_cluster_name,omitempty"`
+	MGRAdminUser        string           `json:"mgr_admin_user,omitempty"`
 	RootPassword        string           `json:"root_password,omitempty"`
 	ReplicationPassword string           `json:"replication_password,omitempty"`
 	SourcePassword      string           `json:"source_password,omitempty"`
 	MGRRecoveryPassword string           `json:"mgr_recovery_password,omitempty"`
+	MGRAdminPassword    string           `json:"mgr_admin_password,omitempty"`
 	ReplicationSecretID int64            `json:"replication_secret_id,omitempty"`
 	SourceSecretID      int64            `json:"source_secret_id,omitempty"`
 	MGRRecoverySecretID int64            `json:"mgr_recovery_secret_id,omitempty"`
+	MGRAdminSecretID    int64            `json:"mgr_admin_secret_id,omitempty"`
 }
 
 type JobManager struct {
@@ -85,6 +92,7 @@ type deploymentTarget struct {
 	privateKey []byte
 	root       string
 	facts      executor.HostFacts
+	resume     bool
 }
 
 func (m *JobManager) CreateDeployment(ctx context.Context, user *User, remoteAddr string, input DeploymentRequest) (string, error) {
@@ -130,9 +138,19 @@ func (m *JobManager) CreateDeployment(ctx context.Context, user *User, remoteAdd
 			return "", err
 		}
 		input.MGRRecoverySecretID = id
+		if input.DeployRouter {
+			if input.MGRAdminPassword == "" {
+				input.MGRAdminPassword, _ = randomToken(32)
+			}
+			id, err := m.saveSecret(ctx, user.ID, input.Name+"-cluster-admin", "mysql_cluster_admin", input.MGRAdminPassword)
+			if err != nil {
+				return "", err
+			}
+			input.MGRAdminSecretID = id
+		}
 	}
 	// Never persist plaintext request secrets in job payloads.
-	input.RootPassword, input.ReplicationPassword, input.SourcePassword, input.MGRRecoveryPassword = "", "", "", ""
+	input.RootPassword, input.ReplicationPassword, input.SourcePassword, input.MGRRecoveryPassword, input.MGRAdminPassword = "", "", "", "", ""
 	payload, _ := json.Marshal(input)
 	jobID := uuid.NewString()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -239,7 +257,7 @@ func (m *JobManager) VerifyInterruptedDeployment(ctx context.Context, user *User
 	if err := json.Unmarshal([]byte(payloadJSON), &deployment); err != nil {
 		return errors.New("部署规格已损坏")
 	}
-	completed := map[int64]bool{}
+	hostStates := map[int64]string{}
 	rows, err := m.Store.DB.QueryContext(ctx, `SELECT host_id,state FROM job_hosts WHERE job_id=?`, jobID)
 	if err != nil {
 		return err
@@ -248,7 +266,7 @@ func (m *JobManager) VerifyInterruptedDeployment(ctx context.Context, user *User
 		var hostID int64
 		var hostState string
 		if rows.Scan(&hostID, &hostState) == nil {
-			completed[hostID] = hostState == "complete"
+			hostStates[hostID] = hostState
 		}
 	}
 	_ = rows.Close()
@@ -260,14 +278,32 @@ func (m *JobManager) VerifyInterruptedDeployment(ctx context.Context, user *User
 		ports := []int{deployment.Port}
 		if deployment.Mode == "mgr" {
 			ports = append(ports, deployment.MGRPort)
+			if deployment.DeployRouter {
+				for port := deployment.RouterRWPort; port <= deployment.RouterRWPort+3; port++ {
+					ports = append(ports, port)
+				}
+			}
 		}
 		facts, err := m.SSH.Probe(ctx, node.HostID, ports)
 		if err != nil {
 			return fmt.Errorf("核实主机 %s 失败: %w", host.Name, err)
 		}
-		if completed[node.HostID] {
+		if hostStates[node.HostID] == "complete" {
 			if facts.Ports[deployment.Port] != "listening" || (deployment.Mode == "mgr" && facts.Ports[deployment.MGRPort] != "listening") {
 				return fmt.Errorf("已完成节点 %s 不再在线，请先人工检查", host.Name)
+			}
+			if deployment.DeployRouter {
+				for port := deployment.RouterRWPort; port <= deployment.RouterRWPort+3; port++ {
+					if facts.Ports[port] != "listening" {
+						return fmt.Errorf("已完成节点 %s 的 Router 端口 %d 不再在线，请先人工检查", host.Name, port)
+					}
+				}
+			}
+			continue
+		}
+		if hostStates[node.HostID] == "database_ready" {
+			if facts.Ports[deployment.Port] != "listening" || facts.Ports[deployment.MGRPort] != "listening" {
+				return fmt.Errorf("节点 %s 的数据库阶段记录与远端状态不一致，请先人工检查", host.Name)
 			}
 			continue
 		}
@@ -399,9 +435,11 @@ func (m *JobManager) runInstanceAction(jobID string, payload instanceActionPaylo
 		replSecret, _ := m.readSecret(ctx, spec.ReplicationSecretID)
 		sourceSecret, _ := m.readSecret(ctx, spec.SourceSecretID)
 		mgrSecret, _ := m.readSecret(ctx, spec.MGRRecoverySecretID)
+		mgrAdminSecret, _ := m.readSecret(ctx, spec.MGRAdminSecretID)
 		req.Secrets.ReplicationPassword = replSecret
 		req.Secrets.SourcePassword = sourceSecret
 		req.Secrets.MGRRecoveryPassword = mgrSecret
+		req.Secrets.MGRAdminPassword = mgrAdminSecret
 		if role == "source" {
 			replicaHost := spec.ReplicaHost
 			if spec.Mode == "replication" && len(spec.Nodes) == 2 {
@@ -422,7 +460,11 @@ func (m *JobManager) runInstanceAction(jobID string, payload instanceActionPaylo
 			for _, node := range spec.Nodes {
 				seeds = append(seeds, net.JoinHostPort(node.LocalIP, strconv.Itoa(spec.MGRPort)))
 			}
-			req.MGR = executor.MGR{LocalAddress: current.LocalIP, Port: spec.MGRPort, Seeds: seeds, GroupName: spec.MGRGroupName, Allowlist: spec.MGRAllowlist, RecoveryUser: spec.MGRRecoveryUser, Bootstrap: false}
+			adminHosts := make([]string, 0, len(spec.Nodes))
+			for _, node := range spec.Nodes {
+				adminHosts = append(adminHosts, node.LocalIP)
+			}
+			req.MGR = executor.MGR{LocalAddress: current.LocalIP, Port: spec.MGRPort, Seeds: seeds, GroupName: spec.MGRGroupName, Allowlist: spec.MGRAllowlist, RecoveryUser: spec.MGRRecoveryUser, AdminUser: spec.MGRAdminUser, AdminHosts: adminHosts, Bootstrap: false}
 		}
 	}
 	m.log(jobID, "info", "execute", fmt.Sprintf("在 %s 执行 %s", host.Name, payload.Action))
@@ -524,11 +566,13 @@ func validateDeployment(input *DeploymentRequest) error {
 			return errors.New("MGR 需要 MySQL 8.0 和独立的有效通信端口")
 		}
 		serverIDs := map[uint32]bool{}
+		localIPs := map[string]bool{}
 		for _, node := range input.Nodes {
-			if net.ParseIP(node.LocalIP) == nil || node.ServerID == 0 || serverIDs[node.ServerID] {
-				return errors.New("MGR 节点需要唯一 server_id 和有效本机 IP")
+			if net.ParseIP(node.LocalIP) == nil || localIPs[node.LocalIP] || node.ServerID == 0 || serverIDs[node.ServerID] {
+				return errors.New("MGR 节点需要唯一 server_id 和唯一的有效本机 IP")
 			}
 			serverIDs[node.ServerID] = true
+			localIPs[node.LocalIP] = true
 		}
 		if input.MGRAllowlist == "" {
 			allowed := make([]string, 0, len(input.Nodes))
@@ -539,6 +583,39 @@ func validateDeployment(input *DeploymentRequest) error {
 		}
 		if input.MGRRecoveryUser == "" {
 			input.MGRRecoveryUser = "aim_mgr"
+		}
+		if input.DeployRouter {
+			if input.RouterRWPort == 0 {
+				input.RouterRWPort = 6460
+			}
+			if input.RouterRWPort < 1 || input.RouterRWPort > 65532 {
+				return errors.New("Router 读写端口必须在 1 到 65532 之间")
+			}
+			for port := input.RouterRWPort; port <= input.RouterRWPort+3; port++ {
+				if port == input.Port || port == input.MGRPort {
+					return errors.New("Router 的四个连续端口不能与 SQL 或 MGR 通信端口重叠")
+				}
+			}
+			if input.RouterClusterName == "" {
+				input.RouterClusterName = "aimCluster"
+			}
+			if !regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,62}$`).MatchString(input.RouterClusterName) {
+				return errors.New("InnoDB Cluster 名称必须以字母开头，且只能包含字母、数字、下划线和连字符")
+			}
+			if input.MGRAdminUser == "" {
+				input.MGRAdminUser = "aim_cluster_admin"
+			}
+			if !regexp.MustCompile(`^[A-Za-z0-9_]{1,32}$`).MatchString(input.MGRAdminUser) {
+				return errors.New("InnoDB Cluster 管理账号无效")
+			}
+			for index := range input.Nodes {
+				if input.Nodes[index].RouterIP == "" {
+					input.Nodes[index].RouterIP = input.Nodes[index].LocalIP
+				}
+				if net.ParseIP(input.Nodes[index].RouterIP) == nil {
+					return errors.New("Router 绑定地址必须是目标主机拥有的有效 IP")
+				}
+			}
 		}
 	}
 	return nil
@@ -580,16 +657,17 @@ func (m *JobManager) runDeployment(jobID string, deployment DeploymentRequest) {
 	}
 	_, _ = m.Store.DB.Exec(`UPDATE jobs SET started_at=? WHERE id=?`, now, jobID)
 	m.log(jobID, "info", "preflight", "开始检查所有目标主机")
-	completedHosts := map[int64]bool{}
-	rows, err := m.Store.DB.Query(`SELECT host_id FROM job_hosts WHERE job_id=? AND state='complete'`, jobID)
+	hostStates := map[int64]string{}
+	rows, err := m.Store.DB.Query(`SELECT host_id,state FROM job_hosts WHERE job_id=?`, jobID)
 	if err != nil {
 		m.fail(jobID, err)
 		return
 	}
 	for rows.Next() {
 		var hostID int64
-		if rows.Scan(&hostID) == nil {
-			completedHosts[hostID] = true
+		var state string
+		if rows.Scan(&hostID, &state) == nil {
+			hostStates[hostID] = state
 		}
 	}
 	_ = rows.Close()
@@ -604,34 +682,52 @@ func (m *JobManager) runDeployment(jobID string, deployment DeploymentRequest) {
 		probePorts := []int{deployment.Port}
 		if deployment.Mode == "mgr" {
 			probePorts = append(probePorts, deployment.MGRPort)
+			if deployment.DeployRouter {
+				for port := deployment.RouterRWPort; port <= deployment.RouterRWPort+3; port++ {
+					probePorts = append(probePorts, port)
+				}
+			}
 		}
 		facts, err := m.SSH.Probe(ctx, node.HostID, probePorts)
 		if err != nil {
 			m.fail(jobID, fmt.Errorf("主机 %s 预检失败: %w", host.Name, err))
 			return
 		}
-		if completedHosts[node.HostID] && facts.Ports[deployment.Port] != "listening" {
+		databaseReady := hostStates[node.HostID] == "database_ready" || hostStates[node.HostID] == "complete"
+		if databaseReady && facts.Ports[deployment.Port] != "listening" {
 			m.fail(jobID, fmt.Errorf("已完成主机 %s 的端口 %d 不再监听，拒绝盲目恢复", host.Name, deployment.Port))
 			return
 		}
-		if completedHosts[node.HostID] && deployment.Mode == "mgr" && facts.Ports[deployment.MGRPort] != "listening" {
+		if databaseReady && deployment.Mode == "mgr" && facts.Ports[deployment.MGRPort] != "listening" {
 			m.fail(jobID, fmt.Errorf("已完成 MGR 主机 %s 的 XCom 端口 %d 不再监听，拒绝继续 join", host.Name, deployment.MGRPort))
 			return
 		}
-		if !completedHosts[node.HostID] && facts.Ports[deployment.Port] == "listening" {
-			m.fail(jobID, fmt.Errorf("主机 %s 的端口 %d 已被占用", host.Name, deployment.Port))
-			return
+		resume := !databaseReady && facts.Ports[deployment.Port] == "listening"
+		if resume {
+			m.log(jobID, "warning", "preflight", fmt.Sprintf("主机 %s 的端口 %d 已监听；将通过受限恢复流程核验 AIM 配置、版本和凭据，核验成功后续跑", host.Name, deployment.Port))
 		}
 		if deployment.Mode == "mgr" && !contains(facts.IPv4, node.LocalIP) {
 			m.fail(jobID, fmt.Errorf("主机 %s 不拥有 MGR 本机 IP %s", host.Name, node.LocalIP))
 			return
+		}
+		if deployment.DeployRouter && !contains(facts.IPv4, node.RouterIP) {
+			m.fail(jobID, fmt.Errorf("主机 %s 不拥有 Router 绑定 IP %s", host.Name, node.RouterIP))
+			return
+		}
+		if deployment.DeployRouter && hostStates[node.HostID] == "complete" {
+			for port := deployment.RouterRWPort; port <= deployment.RouterRWPort+3; port++ {
+				if facts.Ports[port] != "listening" {
+					m.fail(jobID, fmt.Errorf("已完成主机 %s 的 Router 端口 %d 不再监听，拒绝盲目恢复", host.Name, port))
+					return
+				}
+			}
 		}
 		root, err := m.readSecret(ctx, node.RootSecret)
 		if err != nil {
 			m.fail(jobID, err)
 			return
 		}
-		targets = append(targets, deploymentTarget{node: node, host: host, privateKey: key, root: root, facts: facts})
+		targets = append(targets, deploymentTarget{node: node, host: host, privateKey: key, root: root, facts: facts, resume: resume})
 	}
 
 	var media *Media
@@ -657,7 +753,7 @@ func (m *JobManager) runDeployment(jobID string, deployment DeploymentRequest) {
 			return
 		}
 		for _, target := range targets {
-			if completedHosts[target.host.ID] {
+			if hostStates[target.host.ID] == "complete" || hostStates[target.host.ID] == "database_ready" || target.resume {
 				continue
 			}
 			m.log(jobID, "info", "transfer", "向 "+target.host.Name+" 分发安装包")
@@ -675,16 +771,19 @@ func (m *JobManager) runDeployment(jobID string, deployment DeploymentRequest) {
 	replSecret, _ := m.readSecret(ctx, deployment.ReplicationSecretID)
 	sourceSecret, _ := m.readSecret(ctx, deployment.SourceSecretID)
 	mgrSecret, _ := m.readSecret(ctx, deployment.MGRRecoverySecretID)
+	mgrAdminSecret, _ := m.readSecret(ctx, deployment.MGRAdminSecretID)
 	seeds := make([]string, 0, len(targets))
+	adminHosts := make([]string, 0, len(targets))
 	for _, target := range targets {
 		if deployment.Mode == "mgr" {
 			seeds = append(seeds, net.JoinHostPort(target.node.LocalIP, strconv.Itoa(deployment.MGRPort)))
+			adminHosts = append(adminHosts, target.node.LocalIP)
 		}
 	}
 
 	for index, target := range targets {
-		if completedHosts[target.host.ID] {
-			m.log(jobID, "info", "resume", "跳过已完成节点 "+target.host.Name)
+		if hostStates[target.host.ID] == "complete" || hostStates[target.host.ID] == "database_ready" {
+			m.log(jobID, "info", "resume", "跳过数据库已完成节点 "+target.host.Name)
 			continue
 		}
 		role := deployment.Mode
@@ -695,12 +794,17 @@ func (m *JobManager) runDeployment(jobID string, deployment DeploymentRequest) {
 				role = "replica"
 			}
 		}
-		req := executor.Request{
-			Protocol: executor.ProtocolVersion, RequestID: jobID, Action: "install", Version: deployment.Version,
-			Port: deployment.Port, Role: role, BindAddress: deployment.BindAddress, ServerID: target.node.ServerID,
-			Secrets: executor.Secrets{RootPassword: target.root, ReplicationPassword: replSecret, SourcePassword: sourceSecret, MGRRecoveryPassword: mgrSecret},
+		action := "install"
+		if target.resume {
+			action = "resume"
+			m.log(jobID, "info", "resume", "安全续跑已存在的 AIM 实例 "+target.host.Name)
 		}
-		if media != nil {
+		req := executor.Request{
+			Protocol: executor.ProtocolVersion, RequestID: jobID, Action: action, Version: deployment.Version,
+			Port: deployment.Port, Role: role, BindAddress: deployment.BindAddress, ServerID: target.node.ServerID,
+			Secrets: executor.Secrets{RootPassword: target.root, ReplicationPassword: replSecret, SourcePassword: sourceSecret, MGRRecoveryPassword: mgrSecret, MGRAdminPassword: mgrAdminSecret},
+		}
+		if media != nil && !target.resume {
 			req.Archive = &executor.Archive{
 				Name: media.Filename, Size: media.Size, SHA256: media.SHA256, Version: media.Version,
 				Glibc: media.Glibc, Architecture: media.Architecture, Minimal: media.Minimal,
@@ -730,7 +834,7 @@ func (m *JobManager) runDeployment(jobID string, deployment DeploymentRequest) {
 		if role == "mgr" {
 			req.MGR = executor.MGR{LocalAddress: target.node.LocalIP, Port: deployment.MGRPort, Seeds: seeds,
 				GroupName: deployment.MGRGroupName, Allowlist: deployment.MGRAllowlist,
-				Bootstrap: index == 0, RecoveryUser: deployment.MGRRecoveryUser}
+				Bootstrap: index == 0, RecoveryUser: deployment.MGRRecoveryUser, AdminUser: deployment.MGRAdminUser, AdminHosts: adminHosts}
 		}
 		m.log(jobID, "info", "execute", fmt.Sprintf("在 %s 执行 %s 节点部署", target.host.Name, role))
 		if err := m.SSH.RunExecutor(ctx, target.host, target.privateKey, req, func(event executor.Event) {
@@ -741,7 +845,43 @@ func (m *JobManager) runDeployment(jobID string, deployment DeploymentRequest) {
 			m.fail(jobID, fmt.Errorf("主机 %s 部署失败: %w", target.host.Name, err))
 			return
 		}
-		_, _ = m.Store.DB.Exec(`UPDATE job_hosts SET state='complete' WHERE job_id=? AND host_id=?`, jobID, target.host.ID)
+		nextState := "complete"
+		if deployment.DeployRouter {
+			nextState = "database_ready"
+		}
+		_, _ = m.Store.DB.Exec(`UPDATE job_hosts SET state=? WHERE job_id=? AND host_id=?`, nextState, jobID, target.host.ID)
+		hostStates[target.host.ID] = nextState
+	}
+
+	if deployment.DeployRouter {
+		m.log(jobID, "info", "router", fmt.Sprintf("三个 MGR 节点已在线，开始接管 InnoDB Cluster 并部署 Router，Classic RW 端口 %d", deployment.RouterRWPort))
+		for index, target := range targets {
+			if hostStates[target.host.ID] == "complete" {
+				m.log(jobID, "info", "resume", "跳过 Router 已完成节点 "+target.host.Name)
+				continue
+			}
+			req := executor.Request{
+				Protocol:  executor.ProtocolVersion,
+				RequestID: jobID,
+				Action:    "router",
+				Version:   deployment.Version,
+				Port:      deployment.Port,
+				MGR:       executor.MGR{AdminUser: deployment.MGRAdminUser, AdminHosts: adminHosts},
+				Router:    executor.Router{ClusterName: deployment.RouterClusterName, BindAddress: target.node.RouterIP, RWPort: deployment.RouterRWPort, Adopt: index == 0},
+				Secrets:   executor.Secrets{RootPassword: target.root, MGRAdminPassword: mgrAdminSecret},
+			}
+			m.log(jobID, "info", "router", fmt.Sprintf("在 %s 部署 Router（%s:%d）", target.host.Name, target.node.RouterIP, deployment.RouterRWPort))
+			if err := m.SSH.RunExecutor(ctx, target.host, target.privateKey, req, func(event executor.Event) {
+				if event.Message != "" {
+					m.log(jobID, event.Level, event.Phase, target.host.Name+": "+event.Message)
+				}
+			}); err != nil {
+				m.fail(jobID, fmt.Errorf("主机 %s 的 Router 部署失败: %w", target.host.Name, err))
+				return
+			}
+			_, _ = m.Store.DB.Exec(`UPDATE job_hosts SET state='complete' WHERE job_id=? AND host_id=?`, jobID, target.host.ID)
+			hostStates[target.host.ID] = "complete"
+		}
 	}
 	if err := m.recordDeployment(ctx, deployment, targets, jobID); err != nil {
 		m.fail(jobID, err)

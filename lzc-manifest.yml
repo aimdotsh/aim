@@ -1,0 +1,45 @@
+application:
+  subdomain: aim
+  oidc_redirect_path: /api/v1/oidc/callback
+  routes:
+    - /=http://console.f00700f.aim.lzcapp:8080
+  injects:
+    - id: aim-open-file-chooser-v232
+      on: browser
+      when:
+        - /*
+      do:
+        - src: file:///lzcapp/pkg/content/lazycat-injects/lzc-file-chooser-inject.js
+          params:
+            diskRoot: /_lzc/files/home
+            fallbackMime: application/octet-stream
+            locale: auto
+            hooks:
+              fileSystemAccess: false
+              fileInput: true
+
+services:
+  console:
+    image: registry.lazycat.cloud/f007/f00700f/aim-mysql-console:1f8a2e37a98c2af0
+    # landan 当前 lzcos 版本尚未启用 services.<name>.run_as；使用
+    # LPK v2 的持久化 bind + setup_script 兼容旧版，同时镜像本身以
+    # UID/GID 10001 的 aim 用户运行。
+    setup_script: |
+      chown -R 10001:10001 /var/lib/aim-console
+    binds:
+      - /lzcapp/var/aim-console:/var/lib/aim-console
+    environment:
+      - AIM_LISTEN=:8080
+      - AIM_DATA_DIR=/lzcapp/var/aim-console
+      - AIM_DOCUMENT_ROOT=/lzcapp/documents
+      - AIM_MASTER_KEY={{ stable_secret "aim-master-key" }}
+      - AIM_COOKIE_SECURE=true
+      - AIM_LOCAL_AUTH_ENABLED=false
+      - AIM_OIDC_ISSUER=${LAZYCAT_AUTH_OIDC_ISSUER_URI}
+      - AIM_OIDC_CLIENT_ID=${LAZYCAT_AUTH_OIDC_CLIENT_ID}
+      - AIM_OIDC_CLIENT_SECRET=${LAZYCAT_AUTH_OIDC_CLIENT_SECRET}
+      - AIM_OIDC_REDIRECT_URL=https://{{ .S.AppDomain }}/api/v1/oidc/callback
+      - AIM_OIDC_NORMAL_ROLE=viewer
+      - AIM_FILE_PICKER_ORIGIN=https://file.{{ .S.BoxDomain }}
+      - AIM_MAX_UPLOAD_BYTES=2147483648
+      - TZ=Asia/Shanghai

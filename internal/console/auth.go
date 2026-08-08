@@ -74,27 +74,33 @@ func (a *Auth) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user.Active = true
-	token, err := randomToken(32)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "无法创建会话")
-		return
-	}
-	csrf, err := randomToken(24)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "无法创建会话")
-		return
-	}
-	now, expires := time.Now().UTC(), time.Now().UTC().Add(12*time.Hour)
-	_, err = a.Store.DB.ExecContext(r.Context(), `INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at,created_at,remote_addr,user_agent) VALUES(?,?,?,?,?,?,?)`,
-		tokenHash(token), user.ID, csrf, expires.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), ip, r.UserAgent())
+	csrf, err := a.CreateSession(w, r, &user)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "无法创建会话")
 		return
 	}
 	a.clearFailures(ip)
-	http.SetCookie(w, &http.Cookie{Name: "aim_session", Value: token, Path: "/", HttpOnly: true, Secure: a.CookieSecure, SameSite: http.SameSiteStrictMode, MaxAge: int((12 * time.Hour).Seconds())})
 	a.Store.Audit(r.Context(), &user, ip, "login", "session", "", `{}`)
 	writeJSON(w, http.StatusOK, map[string]any{"user": user, "csrf_token": csrf})
+}
+
+func (a *Auth) CreateSession(w http.ResponseWriter, r *http.Request, user *User) (string, error) {
+	token, err := randomToken(32)
+	if err != nil {
+		return "", err
+	}
+	csrf, err := randomToken(24)
+	if err != nil {
+		return "", err
+	}
+	now, expires := time.Now().UTC(), time.Now().UTC().Add(12*time.Hour)
+	_, err = a.Store.DB.ExecContext(r.Context(), `INSERT INTO sessions(token_hash,user_id,csrf_token,expires_at,created_at,remote_addr,user_agent) VALUES(?,?,?,?,?,?,?)`,
+		tokenHash(token), user.ID, csrf, expires.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano), remoteIP(r), r.UserAgent())
+	if err != nil {
+		return "", err
+	}
+	http.SetCookie(w, &http.Cookie{Name: "aim_session", Value: token, Path: "/", HttpOnly: true, Secure: a.CookieSecure, SameSite: http.SameSiteStrictMode, MaxAge: int((12 * time.Hour).Seconds())})
+	return csrf, nil
 }
 
 func (a *Auth) Logout(w http.ResponseWriter, r *http.Request) {

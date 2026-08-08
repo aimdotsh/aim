@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -26,6 +27,7 @@ var (
 	versionPattern   = regexp.MustCompile(`^(5\.6|5\.7|8\.0|8\.4)\.[0-9]+$`)
 	requestIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{7,63}$`)
 	userPattern      = regexp.MustCompile(`^[A-Za-z0-9_]{1,32}$`)
+	clusterPattern   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,62}$`)
 	uuidPattern      = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 	archivePattern   = regexp.MustCompile(`^mysql-((?:5\.6|5\.7|8\.0|8\.4)\.[0-9]+)-linux-glibc([0-9]+\.[0-9]+)-(x86_64|aarch64|i686)(-minimal)?\.(tar\.xz|tar\.gz|tgz|tar)$`)
 )
@@ -39,6 +41,7 @@ func LoadConfig(path string) (Config, error) {
 	cfg := DefaultConfig()
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
+		fillStagingIdentity(&cfg)
 		return cfg, validateConfig(cfg)
 	}
 	if err != nil {
@@ -47,12 +50,38 @@ func LoadConfig(path string) (Config, error) {
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return Config{}, fmt.Errorf("decode executor config: %w", err)
 	}
+	if cfg.RouterPath == "" {
+		cfg.RouterPath = DefaultConfig().RouterPath
+	}
+	fillStagingIdentity(&cfg)
 	return cfg, validateConfig(cfg)
+}
+
+// fillStagingIdentity keeps older target configurations compatible with the
+// backup/monitor protocol.  New bootstrap scripts persist the IDs explicitly;
+// the lookup is a safe fallback when an existing target is upgraded in place.
+func fillStagingIdentity(cfg *Config) {
+	if cfg.StagingUID > 0 && cfg.StagingGID > 0 {
+		return
+	}
+	account, err := user.Lookup("aimops")
+	if err != nil {
+		return
+	}
+	if cfg.StagingUID <= 0 {
+		cfg.StagingUID, _ = strconv.Atoi(account.Uid)
+	}
+	if cfg.StagingGID <= 0 {
+		cfg.StagingGID, _ = strconv.Atoi(account.Gid)
+	}
 }
 
 func validateConfig(cfg Config) error {
 	if !filepath.IsAbs(cfg.AimPath) || filepath.Clean(cfg.AimPath) == "/" {
 		return errors.New("aim_path must be an absolute non-root path")
+	}
+	if !filepath.IsAbs(cfg.RouterPath) || filepath.Clean(cfg.RouterPath) == "/" {
+		return errors.New("router_path must be an absolute non-root path")
 	}
 	for name, path := range map[string]string{
 		"base_root": cfg.BaseRoot, "data_root": cfg.DataRoot, "log_root": cfg.LogRoot,
@@ -94,7 +123,57 @@ func ValidateRequest(req Request, cfg Config) error {
 		}
 		return nil
 	}
-	if req.Action != "install" && req.Action != "reinitialize" && req.Action != "uninstall" &&
+	if req.Action == "backup" || req.Action == "metrics" {
+		if !versionPattern.MatchString(req.Version) {
+			return fmt.Errorf("invalid MySQL version")
+		}
+		if req.Port < 1 || req.Port > 65535 {
+			return fmt.Errorf("invalid MySQL port")
+		}
+		if req.Action == "backup" {
+			if req.Backup == nil {
+				return errors.New("backup selection is required")
+			}
+			if !req.Backup.AllDatabases && len(req.Backup.Databases) == 0 {
+				return errors.New("backup requires all_databases or at least one database")
+			}
+			for _, database := range req.Backup.Databases {
+				if !safeDatabaseName(database) {
+					return fmt.Errorf("invalid database name: %s", database)
+				}
+			}
+		}
+		if strings.TrimSpace(req.Secrets.RootPassword) == "" {
+			return errors.New("MySQL root password is required")
+		}
+		return nil
+	}
+	if req.Action == "router" {
+		if !versionPattern.MatchString(req.Version) || !strings.HasPrefix(req.Version, "8.0.") || !versionAtLeast(req.Version, 8, 0, 23) {
+			return errors.New("MySQL Router requires MySQL 8.0.23 or newer")
+		}
+		if req.Port < 1 || req.Port > 65535 || req.Router.RWPort < 1 || req.Router.RWPort > 65532 {
+			return errors.New("invalid MySQL or Router port")
+		}
+		if req.Router.RWPort <= req.Port && req.Port <= req.Router.RWPort+3 {
+			return errors.New("Router ports overlap the MySQL SQL port")
+		}
+		if !clusterPattern.MatchString(req.Router.ClusterName) || net.ParseIP(req.Router.BindAddress) == nil {
+			return errors.New("invalid Router cluster name or bind address")
+		}
+		if !userPattern.MatchString(req.MGR.AdminUser) || len(req.MGR.AdminHosts) != 3 || req.Secrets.MGRAdminPassword == "" || req.Secrets.RootPassword == "" {
+			return errors.New("Router requires the bounded MGR administrator and root credentials")
+		}
+		adminHosts := map[string]bool{}
+		for _, host := range req.MGR.AdminHosts {
+			if net.ParseIP(host) == nil || adminHosts[host] {
+				return errors.New("invalid MGR administrator source IP")
+			}
+			adminHosts[host] = true
+		}
+		return nil
+	}
+	if req.Action != "install" && req.Action != "resume" && req.Action != "reinitialize" && req.Action != "uninstall" &&
 		req.Action != "start" && req.Action != "stop" && req.Action != "status" {
 		return errors.New("unsupported action")
 	}
@@ -107,7 +186,7 @@ func ValidateRequest(req Request, cfg Config) error {
 	if (req.Action == "reinitialize" || req.Action == "uninstall") && !req.DryRun && !req.Confirm {
 		return errors.New("destructive action requires dry_run or confirm")
 	}
-	if req.Action == "install" || req.Action == "reinitialize" {
+	if req.Action == "install" || req.Action == "resume" || req.Action == "reinitialize" {
 		if req.Role == "" {
 			req.Role = "standalone"
 		}
@@ -147,9 +226,24 @@ func ValidateRequest(req Request, cfg Config) error {
 			if req.MGR.RecoveryUser != "" && !userPattern.MatchString(req.MGR.RecoveryUser) {
 				return errors.New("invalid MGR recovery user")
 			}
+			if req.MGR.AdminUser != "" || len(req.MGR.AdminHosts) != 0 || req.Secrets.MGRAdminPassword != "" {
+				if !userPattern.MatchString(req.MGR.AdminUser) || len(req.MGR.AdminHosts) != 3 || req.Secrets.MGRAdminPassword == "" {
+					return errors.New("incomplete MGR administrator configuration")
+				}
+				adminHosts := map[string]bool{}
+				for _, host := range req.MGR.AdminHosts {
+					if net.ParseIP(host) == nil || adminHosts[host] {
+						return errors.New("invalid MGR administrator source IP")
+					}
+					adminHosts[host] = true
+				}
+			}
 		}
 	}
 	if req.Archive != nil {
+		if req.Action == "resume" {
+			return errors.New("resume uses the verified installed binary tree and does not accept an archive")
+		}
 		if err := validateArchiveMetadata(*req.Archive, req.Version); err != nil {
 			return err
 		}
@@ -331,6 +425,31 @@ func BuildCommand(req Request, cfg Config) ([]string, []string, error) {
 	if req.Action == "probe" {
 		return nil, nil, nil
 	}
+	if req.Action == "backup" || req.Action == "metrics" {
+		// These actions are implemented in Go and invoke the client through a
+		// 0600 option file.  Do not return a secret environment at all.
+		return nil, nil, nil
+	}
+	if req.Action == "router" {
+		args := []string{
+			"--mysql-version", req.Version,
+			"--mysql-port", strconv.Itoa(req.Port),
+			"--cluster-name", req.Router.ClusterName,
+			"--bind-address", req.Router.BindAddress,
+			"--rw-port", strconv.Itoa(req.Router.RWPort),
+			"--admin-user", req.MGR.AdminUser,
+			"--admin-hosts", strings.Join(req.MGR.AdminHosts, ","),
+			"--base-root", cfg.BaseRoot,
+			"--data-root", cfg.DataRoot,
+		}
+		if req.Router.Adopt {
+			args = append(args, "--adopt")
+		}
+		return args, []string{
+			"AIM_ROOT_PASSWORD=" + req.Secrets.RootPassword,
+			"AIM_MGR_ADMIN_PASSWORD=" + req.Secrets.MGRAdminPassword,
+		}, nil
+	}
 	args := []string{"-v", req.Version, "-p", strconv.Itoa(req.Port),
 		"--base-root", cfg.BaseRoot, "--data-root", cfg.DataRoot,
 		"--log-root", cfg.LogRoot, "--tmp-root", cfg.TmpRoot,
@@ -338,12 +457,14 @@ func BuildCommand(req Request, cfg Config) ([]string, []string, error) {
 	switch req.Action {
 	case "start", "stop", "status":
 		args = append(args, "--"+req.Action)
+	case "resume":
+		args = append(args, "--resume")
 	case "uninstall":
 		args = append(args, "--uninstall")
 	case "reinitialize":
 		args = append(args, "--reinitialize")
 	}
-	if req.Action == "install" || req.Action == "reinitialize" {
+	if req.Action == "install" || req.Action == "resume" || req.Action == "reinitialize" {
 		role := req.Role
 		if role == "" {
 			role = "standalone"
@@ -380,6 +501,9 @@ func BuildCommand(req Request, cfg Config) ([]string, []string, error) {
 			if req.MGR.RecoveryUser != "" {
 				args = append(args, "--mgr-recovery-user", req.MGR.RecoveryUser)
 			}
+			if req.MGR.AdminUser != "" {
+				args = append(args, "--mgr-admin-user", req.MGR.AdminUser, "--mgr-admin-hosts", strings.Join(req.MGR.AdminHosts, ","))
+			}
 		}
 	}
 	if req.Archive != nil {
@@ -400,6 +524,7 @@ func BuildCommand(req Request, cfg Config) ([]string, []string, error) {
 		"AIM_REPL_PASSWORD=" + req.Secrets.ReplicationPassword,
 		"AIM_SOURCE_PASSWORD=" + req.Secrets.SourcePassword,
 		"AIM_MGR_RECOVERY_PASSWORD=" + req.Secrets.MGRRecoveryPassword,
+		"AIM_MGR_ADMIN_PASSWORD=" + req.Secrets.MGRAdminPassword,
 	}
 	return args, env, nil
 }
@@ -421,6 +546,8 @@ func Execute(ctx context.Context, req Request, cfg Config, output io.Writer) err
 	var err error
 	if req.Action == "probe" {
 		err = ValidateRequest(req, cfg)
+	} else if req.Action == "backup" || req.Action == "metrics" {
+		err = ValidateRequest(req, cfg)
 	} else {
 		args, secretEnv, err = BuildCommand(req, cfg)
 	}
@@ -438,6 +565,27 @@ func Execute(ctx context.Context, req Request, cfg Config, output io.Writer) err
 		w.write(Event{Protocol: ProtocolVersion, RequestID: req.RequestID, Time: time.Now().UTC(), Level: "info", Phase: "probe", Facts: &facts, ExitCode: &code, OK: &ok})
 		return nil
 	}
+	if req.Action == "metrics" {
+		metrics, metricsErr := CollectMetrics(req, cfg)
+		ok, code := true, 0
+		level := "info"
+		if metricsErr != nil {
+			level = "warning"
+		}
+		w.write(Event{Protocol: ProtocolVersion, RequestID: req.RequestID, Time: time.Now().UTC(), Level: level, Phase: "metrics", Message: errorMessage(metricsErr), Metrics: &metrics, ExitCode: &code, OK: &ok})
+		return nil
+	}
+	if req.Action == "backup" {
+		result, backupErr := ExecuteBackup(ctx, req, cfg)
+		if backupErr != nil {
+			ok, code := false, 1
+			w.write(Event{Protocol: ProtocolVersion, RequestID: req.RequestID, Time: time.Now().UTC(), Level: "error", Phase: "backup", Message: backupErr.Error(), ExitCode: &code, OK: &ok})
+			return backupErr
+		}
+		ok, code := true, 0
+		w.write(Event{Protocol: ProtocolVersion, RequestID: req.RequestID, Time: time.Now().UTC(), Level: "info", Phase: "backup", Message: "远程在线备份已完成并通过 SHA-256 校验", Backup: &result, ExitCode: &code, OK: &ok})
+		return nil
+	}
 	if req.Archive != nil {
 		facts, probeErr := ProbeHost(nil, cfg.DataRoot)
 		if probeErr != nil {
@@ -449,7 +597,11 @@ func Execute(ctx context.Context, req Request, cfg Config, output io.Writer) err
 			return err
 		}
 	}
-	cmd := exec.CommandContext(ctx, cfg.AimPath, args...)
+	commandPath := cfg.AimPath
+	if req.Action == "router" {
+		commandPath = cfg.RouterPath
+	}
+	cmd := exec.CommandContext(ctx, commandPath, args...)
 	cmd.Env = append(os.Environ(), secretEnv...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -496,7 +648,7 @@ func Execute(ctx context.Context, req Request, cfg Config, output io.Writer) err
 }
 
 func newRedactor(secrets Secrets) func(string) string {
-	values := []string{secrets.RootPassword, secrets.ReplicationPassword, secrets.SourcePassword, secrets.MGRRecoveryPassword}
+	values := []string{secrets.RootPassword, secrets.ReplicationPassword, secrets.SourcePassword, secrets.MGRRecoveryPassword, secrets.MGRAdminPassword}
 	return func(value string) string {
 		for _, secret := range values {
 			if secret != "" {

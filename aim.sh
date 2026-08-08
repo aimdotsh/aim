@@ -4,7 +4,7 @@
 set -Eeuo pipefail
 umask 027
 
-readonly AIM_VERSION="2.3.0"
+readonly AIM_VERSION="2.3.1"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 
 VERSION=""
@@ -37,6 +37,7 @@ ASSUME_YES=0
 UNINSTALL=0
 ACTION="install"
 ACTION_COUNT=0
+MYSQL_START_TIMEOUT="300"
 MACHINE_READABLE=0
 PRINT_SECRETS=1
 MACHINE_ERROR_EMITTED=0
@@ -48,6 +49,9 @@ MGR_ALLOWLIST=""
 MGR_BOOTSTRAP=0
 MGR_RECOVERY_USER="aim_mgr"
 MGR_RECOVERY_PASSWORD=""
+MGR_ADMIN_USER=""
+MGR_ADMIN_HOSTS=""
+MGR_ADMIN_PASSWORD=""
 ARCHIVE=""
 DOWNLOAD_URL=""
 OS_ID=""
@@ -74,6 +78,7 @@ Usage:
   sudo $0 -v VERSION [-p PORT] [options]
   sudo $0 --uninstall -v VERSION -p PORT [--dry-run|--yes]
   sudo $0 --status|--start|--stop -v VERSION -p PORT
+  sudo $0 --resume -v VERSION -p PORT [deployment options]
 
 Required:
   -v, --version VERSION       Exact MySQL version, e.g. 5.7.44, 8.0.42, 8.4.5
@@ -90,6 +95,8 @@ Instance:
       --status                Show service and port state for one AIM instance
       --start                 Start one AIM instance
       --stop                  Stop one AIM instance
+      --resume                Safely continue an interrupted AIM installation
+      --startup-timeout SEC   MySQL readiness timeout (default: 300)
 
 Replication:
       --replica-host HOST     Account host used on a source (default: %)
@@ -111,6 +118,10 @@ MGR (MySQL 8.0.23+):
                               Recovery account (default: aim_mgr)
       --mgr-recovery-password PASS
                               Same recovery password on every member
+      --mgr-admin-user USER   Optional InnoDB Cluster administrator
+      --mgr-admin-hosts LIST  Exact MGR node IPs allowed for that administrator
+      --mgr-admin-password PASS
+                              Same random administrator password on every member
 
 Paths and package:
   -c, --config FILE           Optional shell config (default: aim.conf)
@@ -253,6 +264,7 @@ apply_secret_environment() {
     [[ -z "${AIM_REPL_PASSWORD:-}" ]] || REPL_PASSWORD="$AIM_REPL_PASSWORD"
     [[ -z "${AIM_SOURCE_PASSWORD:-}" ]] || SOURCE_PASSWORD="$AIM_SOURCE_PASSWORD"
     [[ -z "${AIM_MGR_RECOVERY_PASSWORD:-}" ]] || MGR_RECOVERY_PASSWORD="$AIM_MGR_RECOVERY_PASSWORD"
+    [[ -z "${AIM_MGR_ADMIN_PASSWORD:-}" ]] || MGR_ADMIN_PASSWORD="$AIM_MGR_ADMIN_PASSWORD"
 }
 
 need_arg() { [[ $# -ge 2 && -n "$2" ]] || die "option $1 requires a value"; }
@@ -284,6 +296,9 @@ parse_args() {
             --status) set_action status; shift ;;
             --start) set_action start; shift ;;
             --stop) set_action stop; shift ;;
+            --resume) set_action resume; shift ;;
+            --startup-timeout) need_arg "$@"; MYSQL_START_TIMEOUT="$2"; shift 2 ;;
+            --startup-timeout=*) MYSQL_START_TIMEOUT="${1#*=}"; shift ;;
             --replica-host) need_arg "$@"; REPLICA_HOST="$2"; shift 2 ;;
             --repl-user) need_arg "$@"; REPL_USER="$2"; shift 2 ;;
             --repl-password) need_arg "$@"; REPL_PASSWORD="$2"; shift 2 ;;
@@ -299,6 +314,9 @@ parse_args() {
             --mgr-bootstrap) MGR_BOOTSTRAP=1; shift ;;
             --mgr-recovery-user) need_arg "$@"; MGR_RECOVERY_USER="$2"; shift 2 ;;
             --mgr-recovery-password) need_arg "$@"; MGR_RECOVERY_PASSWORD="$2"; shift 2 ;;
+            --mgr-admin-user) need_arg "$@"; MGR_ADMIN_USER="$2"; shift 2 ;;
+            --mgr-admin-hosts) need_arg "$@"; MGR_ADMIN_HOSTS="$2"; shift 2 ;;
+            --mgr-admin-password) need_arg "$@"; MGR_ADMIN_PASSWORD="$2"; shift 2 ;;
             --base-root) need_arg "$@"; BASE_ROOT="$2"; shift 2 ;;
             --data-root) need_arg "$@"; DATA_ROOT="$2"; shift 2 ;;
             --log-root) need_arg "$@"; LOG_ROOT="$2"; shift 2 ;;
@@ -333,20 +351,24 @@ derive_instance_paths() {
 }
 
 validate_inputs() {
-    local root_path seed seed_port
-    local -a seed_entries
+    local root_path seed seed_port admin_entry
+    local -a seed_entries admin_entries
     [[ "$VERSION" =~ ^(5\.6|5\.7|8\.0|8\.4)\.[0-9]+$ ]] ||
         die "unsupported version '$VERSION'; expected an exact 5.6.x, 5.7.x, 8.0.x, or 8.4.x version"
     SERIES="${BASH_REMATCH[1]}"
     [[ "$PORT" =~ ^[0-9]+$ ]] || die "invalid port: $PORT"
     [[ "$SOURCE_PORT" =~ ^[0-9]+$ ]] || die "invalid source port: $SOURCE_PORT"
     [[ "$MGR_PORT" =~ ^[0-9]+$ ]] || die "invalid MGR port: $MGR_PORT"
+    [[ "$MYSQL_START_TIMEOUT" =~ ^[0-9]+$ ]] || die "invalid MySQL startup timeout: $MYSQL_START_TIMEOUT"
     PORT=$((10#$PORT))
     SOURCE_PORT=$((10#$SOURCE_PORT))
     MGR_PORT=$((10#$MGR_PORT))
+    MYSQL_START_TIMEOUT=$((10#$MYSQL_START_TIMEOUT))
     (( PORT >= 1 && PORT <= 65535 )) || die "invalid port: $PORT"
     (( SOURCE_PORT >= 1 && SOURCE_PORT <= 65535 )) || die "invalid source port: $SOURCE_PORT"
     (( MGR_PORT >= 1 && MGR_PORT <= 65535 )) || die "invalid MGR port: $MGR_PORT"
+    (( MYSQL_START_TIMEOUT >= 30 && MYSQL_START_TIMEOUT <= 1800 )) ||
+        die "MySQL startup timeout must be between 30 and 1800 seconds"
     [[ "$ROLE" == master ]] && ROLE="source"
     [[ "$ROLE" == slave ]] && ROLE="replica"
     [[ "$MGR_BOOTSTRAP" =~ ^[01]$ ]] || die "MGR_BOOTSTRAP must be 0 or 1"
@@ -383,6 +405,16 @@ validate_inputs() {
         [[ "$MGR_RECOVERY_USER" =~ ^[A-Za-z0-9_]+$ ]] || die "invalid MGR recovery user"
         [[ -n "$MGR_RECOVERY_PASSWORD" ]] ||
             die "--mgr-recovery-password or AIM_MGR_RECOVERY_PASSWORD is required for role=mgr"
+        if [[ -n "$MGR_ADMIN_USER" || -n "$MGR_ADMIN_HOSTS" || -n "$MGR_ADMIN_PASSWORD" ]]; then
+            [[ "$MGR_ADMIN_USER" =~ ^[A-Za-z0-9_]+$ ]] || die "invalid MGR administrator user"
+            [[ "$MGR_ADMIN_HOSTS" =~ ^[0-9A-Fa-f:.,]+$ ]] || die "invalid MGR administrator host IP list"
+            [[ -n "$MGR_ADMIN_PASSWORD" ]] || die "MGR administrator password is required"
+            IFS=',' read -r -a admin_entries <<<"$MGR_ADMIN_HOSTS"
+            (( ${#admin_entries[@]} == 3 )) || die "MGR administrator requires exactly three source IPs"
+            for admin_entry in "${admin_entries[@]}"; do
+                [[ -n "$admin_entry" ]] || die "empty MGR administrator source IP"
+            done
+        fi
         (( MGR_PORT != PORT )) || die "MGR XCom port must be different from the MySQL SQL port"
     fi
     [[ "$REPL_USER" =~ ^[A-Za-z0-9_]+$ ]] || die "invalid replication user"
@@ -929,13 +961,28 @@ memory_megabytes() {
     awk '/MemTotal/ {printf "%d", $2 / 1024}' /proc/meminfo
 }
 
+buffer_pool_megabytes() {
+    local memory="${1:-$(memory_megabytes)}" buffer_pool
+    # Small development nodes need enough headroom for the OS, SSH, Router
+    # and Group Replication.  A percentage-only rule gave a 2 GiB host a
+    # roughly 1.2 GiB buffer pool and made first startup prone to timeouts.
+    if (( memory <= 3072 )); then
+        buffer_pool=128
+    elif (( memory <= 8192 )); then
+        buffer_pool=$(( memory * 25 / 100 ))
+    else
+        buffer_pool=$(( memory * 50 / 100 ))
+    fi
+    (( buffer_pool < 128 )) && buffer_pool=128
+    (( buffer_pool > 131072 )) && buffer_pool=131072
+    printf '%d' "$buffer_pool"
+}
+
 write_config() {
     local memory buffer_pool expire_config role_config gtid_config binlog_format_config updates_option
     local mgr_config mgr_applier_config
     memory="$(memory_megabytes)"
-    buffer_pool=$(( memory * 60 / 100 ))
-    (( buffer_pool < 128 )) && buffer_pool=128
-    (( buffer_pool > 131072 )) && buffer_pool=131072
+    buffer_pool="$(buffer_pool_megabytes "$memory")"
     if [[ "$SERIES" =~ ^8\. ]]; then expire_config="binlog_expire_logs_seconds = 604800"; else expire_config="expire_logs_days = 7"; fi
     role_config=""
     if [[ "$ROLE" == replica ]]; then
@@ -1158,13 +1205,17 @@ start_database() {
 
 wait_for_mysql() {
     (( DRY_RUN )) && return
-    local _attempt
-    for _attempt in {1..60}; do
+    local _attempt attempts
+    attempts=$(( (MYSQL_START_TIMEOUT + 1) / 2 ))
+    for (( _attempt=1; _attempt<=attempts; _attempt++ )); do
         if "$MYSQLADMIN" --protocol=socket --socket="$SOCKET" --user=root ping >/dev/null 2>&1; then return; fi
+        if (( _attempt % 15 == 0 )); then
+            log "waiting for MySQL on port $PORT (${_attempt} attempts, timeout ${MYSQL_START_TIMEOUT}s)"
+        fi
         sleep 2
     done
     tail -n 80 "$LOGDIR/error.log" >&2 || true
-    die "MySQL did not become ready within 120 seconds"
+    die "MySQL did not become ready within ${MYSQL_START_TIMEOUT} seconds"
 }
 
 mysql_root() {
@@ -1185,6 +1236,100 @@ secure_root() {
     fi
 }
 
+ensure_root_password() {
+    [[ -n "$ROOT_PASSWORD" ]] || die "AIM_ROOT_PASSWORD is required to resume an AIM instance"
+    (( DRY_RUN )) && { log "would verify or finish setting the local root password"; return; }
+    if MYSQL_PWD="$ROOT_PASSWORD" "$MYSQL" --protocol=socket --socket="$SOCKET" --user=root \
+        --batch --skip-column-names -e 'SELECT 1;' >/dev/null 2>&1; then
+        log "the saved root credential already matches the running instance"
+        return
+    fi
+    if "$MYSQL" --protocol=socket --socket="$SOCKET" --user=root \
+        --batch --skip-column-names -e 'SELECT 1;' >/dev/null 2>&1; then
+        log "finishing root credential initialization after the interrupted startup"
+        secure_root
+        MYSQL_PWD="$ROOT_PASSWORD" "$MYSQL" --protocol=socket --socket="$SOCKET" --user=root \
+            --batch --skip-column-names -e 'SELECT 1;' >/dev/null 2>&1 ||
+            die "root credential initialization could not be verified"
+        return
+    fi
+    die "the running MySQL instance does not accept the credential saved by this deployment; refusing to take it over"
+}
+
+config_value() {
+    local key="$1"
+    awk -F= -v wanted="$key" '
+        {
+            name=$1
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", name)
+            if (name == wanted) {
+                value=substr($0, index($0, "=") + 1)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                print value
+                exit
+            }
+        }
+    ' "$CNF_FILE"
+}
+
+expect_config_value() {
+    local key="$1" expected="$2" actual
+    actual="$(config_value "$key")"
+    [[ "$actual" == "$expected" ]] ||
+        die "existing AIM configuration mismatch for $key: expected '$expected', found '${actual:-missing}'"
+}
+
+validate_resumable_instance() {
+    local owner actual_version
+    [[ -f "$CNF_FILE" && ! -L "$CNF_FILE" ]] ||
+        die "port $PORT is listening but no regular AIM configuration exists at $CNF_FILE"
+    [[ "$(head -n 1 "$CNF_FILE")" == '# Generated by AIM '* ]] ||
+        die "existing configuration was not generated by AIM; refusing to take over port $PORT"
+    if (( ! DRY_RUN )); then
+        owner="$(stat -c '%u' "$CNF_FILE")"
+        [[ "$owner" == 0 ]] || die "existing AIM configuration is not owned by root"
+        [[ -z "$(find "$CNF_FILE" -maxdepth 0 -perm /022 -print -quit)" ]] ||
+            die "existing AIM configuration is writable by group or others"
+    fi
+    [[ -x "$BASEDIR/bin/mysqld" && -x "$MYSQL" && -x "$MYSQLADMIN" ]] ||
+        die "existing AIM binary tree is incomplete: $BASEDIR"
+    actual_version="$("$BASEDIR/bin/mysqld" --no-defaults --version 2>/dev/null | awk '{print $3}')"
+    [[ "$actual_version" == "$VERSION" ]] ||
+        die "existing AIM binary version is $actual_version, expected $VERSION"
+    expect_config_value port "$PORT"
+    expect_config_value bind_address "$BIND_ADDRESS"
+    expect_config_value server_id "$SERVER_ID"
+    expect_config_value basedir "$BASEDIR"
+    expect_config_value datadir "$DATADIR"
+    expect_config_value socket "$SOCKET"
+    if [[ "$ROLE" == mgr ]]; then
+        expect_config_value plugin_load_add group_replication.so
+        expect_config_value report_host "$MGR_LOCAL_ADDRESS"
+        expect_config_value loose-group_replication_group_name "$MGR_GROUP_NAME"
+        expect_config_value loose-group_replication_local_address "${MGR_LOCAL_ADDRESS}:${MGR_PORT}"
+        expect_config_value loose-group_replication_group_seeds "$MGR_SEEDS"
+        expect_config_value loose-group_replication_ip_allowlist "$MGR_ALLOWLIST"
+    fi
+    log "verified existing AIM instance metadata for MySQL $VERSION on port $PORT"
+}
+
+resume_instance() {
+    validate_resumable_instance
+    if (( DRY_RUN )); then
+        log "would wait up to ${MYSQL_START_TIMEOUT}s and continue the interrupted $ROLE deployment"
+        machine_result true resume preview
+        return
+    fi
+    wait_for_mysql
+    ensure_root_password
+    configure_source
+    configure_replica
+    configure_mgr
+    verify_installation
+    log "interrupted AIM deployment resumed successfully"
+    summary
+}
+
 configure_source() {
     [[ "$ROLE" == source ]] || return 0
     [[ -n "$REPL_PASSWORD" ]] || REPL_PASSWORD="$(random_password)"
@@ -1196,7 +1341,7 @@ configure_source() {
     if [[ "$SERIES" == 5.6 ]]; then
         mysql_root -e "GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO '${user}'@'${host}' IDENTIFIED BY '${password}'; FLUSH PRIVILEGES;"
     else
-        mysql_root -e "CREATE USER '${user}'@'${host}' IDENTIFIED BY '${password}'; GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO '${user}'@'${host}';"
+        mysql_root -e "CREATE USER IF NOT EXISTS '${user}'@'${host}' IDENTIFIED BY '${password}'; ALTER USER '${user}'@'${host}' IDENTIFIED BY '${password}'; GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO '${user}'@'${host}';"
     fi
 }
 
@@ -1207,12 +1352,18 @@ configure_replica() {
     host="$(sql_escape "$SOURCE_HOST")"
     user="$(sql_escape "$SOURCE_USER")"
     password="$(sql_escape "$SOURCE_PASSWORD")"
+    # STOP returns an error when the channel has never been configured.  That
+    # is expected during a first run, while CHANGE/START must still succeed.
     if version_ge "$VERSION" 8.0.23; then
+        mysql_root -e 'STOP REPLICA;' >/dev/null 2>&1 || true
         sql="CHANGE REPLICATION SOURCE TO SOURCE_HOST='${host}', SOURCE_PORT=${SOURCE_PORT}, SOURCE_USER='${user}', SOURCE_PASSWORD='${password}', SOURCE_AUTO_POSITION=1, GET_SOURCE_PUBLIC_KEY=1; START REPLICA;"
-    elif [[ "$SERIES" == 8.0 ]]; then
-        sql="CHANGE MASTER TO MASTER_HOST='${host}', MASTER_PORT=${SOURCE_PORT}, MASTER_USER='${user}', MASTER_PASSWORD='${password}', MASTER_AUTO_POSITION=1, GET_MASTER_PUBLIC_KEY=1; START SLAVE;"
     else
-        sql="CHANGE MASTER TO MASTER_HOST='${host}', MASTER_PORT=${SOURCE_PORT}, MASTER_USER='${user}', MASTER_PASSWORD='${password}', MASTER_AUTO_POSITION=1; START SLAVE;"
+        mysql_root -e 'STOP SLAVE;' >/dev/null 2>&1 || true
+        if [[ "$SERIES" == 8.0 ]]; then
+            sql="CHANGE MASTER TO MASTER_HOST='${host}', MASTER_PORT=${SOURCE_PORT}, MASTER_USER='${user}', MASTER_PASSWORD='${password}', MASTER_AUTO_POSITION=1, GET_MASTER_PUBLIC_KEY=1; START SLAVE;"
+        else
+            sql="CHANGE MASTER TO MASTER_HOST='${host}', MASTER_PORT=${SOURCE_PORT}, MASTER_USER='${user}', MASTER_PASSWORD='${password}', MASTER_AUTO_POSITION=1; START SLAVE;"
+        fi
     fi
     mysql_root -e "$sql"
 }
@@ -1228,7 +1379,14 @@ configure_mgr() {
         return
     fi
 
-    local business_tables recovery_user recovery_password member_state="" _attempt
+    local business_tables recovery_user recovery_password admin_user admin_host admin_password member_state="" _attempt attempts
+    local -a admin_hosts
+    member_state="$(mysql_root -e "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_ID=@@server_uuid;" 2>/dev/null || true)"
+    if [[ "$member_state" == ONLINE ]]; then
+        log "MGR member is already ONLINE; keeping the existing group state"
+        mysql_root -e "SET PERSIST group_replication_start_on_boot=ON;"
+        return
+    fi
     business_tables="$(mysql_root -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema NOT IN ('mysql','information_schema','performance_schema','sys');")"
     [[ "$business_tables" == 0 ]] ||
         die "role=mgr refuses an instance containing business tables; provision a validated consistent snapshot manually"
@@ -1243,6 +1401,26 @@ SET SQL_LOG_BIN=1;
 RESET MASTER;
 CHANGE REPLICATION SOURCE TO SOURCE_USER='${recovery_user}', SOURCE_PASSWORD='${recovery_password}' FOR CHANNEL 'group_replication_recovery';
 SQL
+
+    # Router-enabled deployments create the same tightly scoped AdminAPI
+    # account locally on every member before Group Replication starts.  The
+    # account is accepted only from the first MGR member's exact business IP;
+    # it is never a remotely enabled root account.
+    if [[ -n "$MGR_ADMIN_USER" ]]; then
+        admin_user="$(sql_escape "$MGR_ADMIN_USER")"
+        admin_password="$(sql_escape "$MGR_ADMIN_PASSWORD")"
+        IFS=',' read -r -a admin_hosts <<<"$MGR_ADMIN_HOSTS"
+        for admin_host in "${admin_hosts[@]}"; do
+            admin_host="$(sql_escape "$admin_host")"
+            mysql_root <<SQL
+SET SQL_LOG_BIN=0;
+CREATE USER IF NOT EXISTS '${admin_user}'@'${admin_host}' IDENTIFIED BY '${admin_password}';
+ALTER USER '${admin_user}'@'${admin_host}' IDENTIFIED BY '${admin_password}';
+GRANT ALL PRIVILEGES ON *.* TO '${admin_user}'@'${admin_host}' WITH GRANT OPTION;
+SET SQL_LOG_BIN=1;
+SQL
+        done
+    fi
     warn "MGR recovery credentials are stored by MySQL in replication metadata; protect the host and MySQL data directory"
 
     if (( MGR_BOOTSTRAP )); then
@@ -1256,12 +1434,13 @@ SQL
         mysql_root -e "START GROUP_REPLICATION;"
     fi
 
-    for _attempt in {1..60}; do
+    attempts=$(( (MYSQL_START_TIMEOUT + 1) / 2 ))
+    for (( _attempt=1; _attempt<=attempts; _attempt++ )); do
         member_state="$(mysql_root -e "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_ID=@@server_uuid;" || true)"
         [[ "$member_state" == ONLINE ]] && break
         sleep 2
     done
-    [[ "$member_state" == ONLINE ]] || die "MGR member did not become ONLINE within 120 seconds (state: ${member_state:-missing})"
+    [[ "$member_state" == ONLINE ]] || die "MGR member did not become ONLINE within ${MYSQL_START_TIMEOUT} seconds (state: ${member_state:-missing})"
     mysql_root -e "SET PERSIST group_replication_start_on_boot=ON;"
     mysql_root -e "SELECT MEMBER_HOST, MEMBER_PORT, MEMBER_STATE, MEMBER_ROLE, MEMBER_VERSION FROM performance_schema.replication_group_members ORDER BY MEMBER_HOST;"
 }
@@ -1335,6 +1514,10 @@ main() {
     validate_inputs
     detect_platform
     require_root
+    if [[ "$ACTION" == resume ]]; then
+        resume_instance
+        return
+    fi
     reinitialize_instance
     check_port_and_paths
     prepare_install_roots

@@ -12,3 +12,6 @@ data/
 secrets/
 caddy-data/
 caddy-config/
+.DS_Store
+.lzc-cli-cache*
+.lzc-cli-build*

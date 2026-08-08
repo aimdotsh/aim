@@ -254,3 +254,121 @@ func (m *SSHManager) UploadArchive(ctx context.Context, host Host, privateKey []
 	}
 	return nil
 }
+
+func (m *SSHManager) DownloadStagedFile(ctx context.Context, host Host, privateKey []byte, requestID, remotePath, localPath string, expectedSize int64, progress func(int64, int64)) error {
+	if err := validateStagedPath(requestID, remotePath, m.RemoteStagingRoot); err != nil {
+		return err
+	}
+	if filepath.IsAbs(localPath) == false || filepath.Base(localPath) == "." || filepath.Base(localPath) == ".." {
+		return errors.New("invalid local backup path")
+	}
+	client, err := m.dial(ctx, host, privateKey)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return err
+	}
+	defer sftpClient.Close()
+	info, err := sftpClient.Stat(remotePath)
+	if err != nil {
+		return fmt.Errorf("远程备份文件不存在: %w", err)
+	}
+	if !info.Mode().IsRegular() || (expectedSize > 0 && info.Size() != expectedSize) {
+		return errors.New("远程备份文件大小或类型校验失败")
+	}
+	remote, err := sftpClient.Open(remotePath)
+	if err != nil {
+		return err
+	}
+	defer remote.Close()
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o700); err != nil {
+		return err
+	}
+	partial := localPath + ".partial"
+	_ = os.Remove(partial)
+	local, err := os.OpenFile(partial, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	var copied int64
+	if progress != nil {
+		progress(0, info.Size())
+	}
+	buffer := make([]byte, 1<<20)
+	for {
+		n, readErr := remote.Read(buffer)
+		if n > 0 {
+			if _, err := local.Write(buffer[:n]); err != nil {
+				_ = local.Close()
+				_ = os.Remove(partial)
+				return err
+			}
+			copied += int64(n)
+			if progress != nil {
+				progress(copied, info.Size())
+			}
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			_ = local.Close()
+			_ = os.Remove(partial)
+			return readErr
+		}
+		select {
+		case <-ctx.Done():
+			_ = local.Close()
+			_ = os.Remove(partial)
+			return ctx.Err()
+		default:
+		}
+	}
+	if err := local.Close(); err != nil {
+		_ = os.Remove(partial)
+		return err
+	}
+	if copied != info.Size() {
+		_ = os.Remove(partial)
+		return errors.New("下载的备份文件大小不一致")
+	}
+	return os.Rename(partial, localPath)
+}
+
+func (m *SSHManager) RemoveStagedFile(ctx context.Context, host Host, privateKey []byte, requestID, remotePath string) error {
+	if err := validateStagedPath(requestID, remotePath, m.RemoteStagingRoot); err != nil {
+		return err
+	}
+	client, err := m.dial(ctx, host, privateKey)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	sftpClient, err := sftp.NewClient(client)
+	if err != nil {
+		return err
+	}
+	defer sftpClient.Close()
+	if err := sftpClient.Remove(remotePath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	requestDir := filepath.ToSlash(filepath.Join(m.RemoteStagingRoot, requestID))
+	_ = sftpClient.Remove(filepath.ToSlash(filepath.Join(requestDir, ".aim-client.cnf")))
+	_ = sftpClient.Remove(requestDir)
+	return nil
+}
+
+func validateStagedPath(requestID, remotePath, stagingRoot string) error {
+	if !safeRequestIDPattern.MatchString(requestID) {
+		return errors.New("invalid request ID for remote staging")
+	}
+	clean := filepath.Clean(remotePath)
+	root := filepath.Clean(filepath.Join(stagingRoot, requestID))
+	if clean != filepath.Join(root, "backup.sql.gz") || !strings.HasPrefix(clean, root+string(filepath.Separator)) {
+		return errors.New("remote backup path is outside the task staging directory")
+	}
+	return nil
+}

@@ -1,0 +1,131 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+umask 077
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$SCRIPT_DIR/aim.sh" && -d "$SCRIPT_DIR/scripts" ]]; then
+    PROJECT_ROOT="$SCRIPT_DIR"
+else
+    PROJECT_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+fi
+PAYLOAD_DIR="${AIM_HOST_KIT_PAYLOAD_DIR:-$PROJECT_ROOT/dist/host-kit}"
+KEY_PATH="${AIM_CONSOLE_KEY:-$HOME/.ssh/aim/aim_console_ed25519}"
+SSH_PORT=22
+INSTALL_NOW=false
+TARGET=""
+
+usage() {
+    cat <<'EOF'
+Usage:
+  ./scripts/aim-copy-id [options] user@host
+
+Options:
+  --key PATH       AIM console private key path
+  --port PORT      Target SSH port (default: 22)
+  --install        Run the remote sudo installer immediately after copying
+  -h, --help       Show this help
+
+Examples:
+  ./scripts/aim-copy-id root@192.168.1.100
+  ./scripts/aim-copy-id --port 2222 ops@mysql-node-01
+  ./scripts/aim-copy-id --install root@192.168.1.100
+EOF
+}
+
+need_arg() {
+    [[ $# -ge 2 && -n "$2" ]] || { printf 'missing value for %s\n' "$1" >&2; exit 2; }
+}
+
+while (( $# )); do
+    case "$1" in
+        --key) need_arg "$@"; KEY_PATH="$2"; shift 2 ;;
+        --port) need_arg "$@"; SSH_PORT="$2"; shift 2 ;;
+        --install) INSTALL_NOW=true; shift ;;
+        -h|--help) usage; exit 0 ;;
+        -*) printf 'unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
+        *)
+            [[ -z "$TARGET" ]] || { printf 'only one target may be specified\n' >&2; exit 2; }
+            TARGET="$1"
+            shift
+            ;;
+    esac
+done
+
+[[ -n "$TARGET" ]] || { usage >&2; exit 2; }
+[[ "$TARGET" =~ ^[A-Za-z0-9_.%:@-]+$ && "$TARGET" != -* ]] || { printf 'invalid SSH target: %s\n' "$TARGET" >&2; exit 2; }
+[[ "$SSH_PORT" =~ ^[0-9]+$ ]] && (( SSH_PORT >= 1 && SSH_PORT <= 65535 )) || { printf 'invalid SSH port: %s\n' "$SSH_PORT" >&2; exit 2; }
+
+for command_name in ssh scp ssh-keygen; do
+    command -v "$command_name" >/dev/null 2>&1 || { printf '%s is required\n' "$command_name" >&2; exit 1; }
+done
+
+# OpenSSH limits Unix-domain socket paths to roughly 104 bytes on macOS.
+# TMPDIR commonly points into a very long /var/folders path, so force a short,
+# private directory under /tmp and use a one-character socket name.
+CONTROL_DIR="$(mktemp -d /tmp/aim-ssh.XXXXXX)"
+CONTROL_PATH="$CONTROL_DIR/c"
+SSH_OPTIONS=(-p "$SSH_PORT" -o ControlMaster=auto -o ControlPersist=60 -o "ControlPath=$CONTROL_PATH")
+SCP_OPTIONS=(-P "$SSH_PORT" -o ControlMaster=auto -o ControlPersist=60 -o "ControlPath=$CONTROL_PATH")
+cleanup() {
+    ssh "${SSH_OPTIONS[@]}" -O exit -- "$TARGET" >/dev/null 2>&1 || true
+    rm -r -- "$CONTROL_DIR"
+}
+trap cleanup EXIT
+
+if [[ ! -f "$KEY_PATH" ]]; then
+    install -d -m 0700 "$(dirname -- "$KEY_PATH")"
+    ssh-keygen -q -t ed25519 -a 100 -N '' -C 'aim-console' -f "$KEY_PATH"
+    printf 'Generated AIM console key: %s\n' "$KEY_PATH"
+fi
+chmod 0600 "$KEY_PATH"
+
+if [[ ! -f "$KEY_PATH.pub" ]]; then
+    ssh-keygen -y -f "$KEY_PATH" >"$KEY_PATH.pub"
+fi
+chmod 0644 "$KEY_PATH.pub"
+ssh-keygen -y -f "$KEY_PATH" >/dev/null
+
+printf 'Detecting target architecture via SSH...\n'
+REMOTE_ARCH="$(ssh "${SSH_OPTIONS[@]}" -- "$TARGET" 'uname -m')"
+case "$REMOTE_ARCH" in
+    x86_64|amd64) EXECUTOR_NAME="aim-executor-linux-amd64" ;;
+    aarch64|arm64) EXECUTOR_NAME="aim-executor-linux-arm64" ;;
+    *) printf 'unsupported target architecture: %s\n' "$REMOTE_ARCH" >&2; exit 1 ;;
+esac
+
+for required_file in "$PAYLOAD_DIR/$EXECUTOR_NAME" "$PROJECT_ROOT/aim.sh" "$PROJECT_ROOT/router.sh" "$PROJECT_ROOT/scripts/bootstrap-target.sh" "$PROJECT_ROOT/scripts/install-staged-target.sh"; do
+    [[ -f "$required_file" ]] || {
+        printf 'missing host-kit payload: %s\n' "$required_file" >&2
+        printf 'Build it first with: make host-kit\n' >&2
+        exit 1
+    }
+done
+
+REMOTE_DIR="/tmp/aim-bootstrap-$(date +%Y%m%d%H%M%S)-$$"
+ssh "${SSH_OPTIONS[@]}" -- "$TARGET" "umask 077 && mkdir -p '$REMOTE_DIR'"
+
+scp "${SCP_OPTIONS[@]}" -- \
+    "$PROJECT_ROOT/aim.sh" \
+    "$PROJECT_ROOT/router.sh" \
+    "$PROJECT_ROOT/scripts/bootstrap-target.sh" \
+    "$PROJECT_ROOT/scripts/install-staged-target.sh" \
+    "$PAYLOAD_DIR/$EXECUTOR_NAME" \
+    "$TARGET:$REMOTE_DIR/"
+
+scp "${SCP_OPTIONS[@]}" -- "$KEY_PATH.pub" "$TARGET:$REMOTE_DIR/aim_console_ed25519.pub"
+
+ssh "${SSH_OPTIONS[@]}" -- "$TARGET" "cd '$REMOTE_DIR' && mv '$EXECUTOR_NAME' aim-executor && chmod 0700 install-staged-target.sh bootstrap-target.sh aim.sh router.sh aim-executor"
+
+REMOTE_COMMAND="sudo '$REMOTE_DIR/install-staged-target.sh'"
+printf '\nFiles copied successfully.\n'
+printf 'AIM private key for the web form: %s\n' "$KEY_PATH"
+
+if [[ "$INSTALL_NOW" == true ]]; then
+    printf 'Running remote installer...\n'
+    ssh -t "${SSH_OPTIONS[@]}" -- "$TARGET" "$REMOTE_COMMAND"
+    printf 'Target initialization completed.\n'
+else
+    printf '\nRun this one command on the target host:\n\n  %s\n\n' "$REMOTE_COMMAND"
+    printf 'Or run it from this computer:\n\n  ssh -t -p %s %s %q\n\n' "$SSH_PORT" "$TARGET" "$REMOTE_COMMAND"
+fi

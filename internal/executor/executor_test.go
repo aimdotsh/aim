@@ -30,6 +30,7 @@ func testConfig(t *testing.T) Config {
 	root := t.TempDir()
 	cfg := Config{
 		AimPath:     filepath.Join(root, "aim.sh"),
+		RouterPath:  filepath.Join(root, "router.sh"),
 		BaseRoot:    filepath.Join(root, "opt/mysql"),
 		DataRoot:    filepath.Join(root, "data/mysql"),
 		LogRoot:     filepath.Join(root, "log/mysql"),
@@ -40,6 +41,31 @@ func testConfig(t *testing.T) Config {
 		t.Fatal(err)
 	}
 	return cfg
+}
+
+func TestRouterRequestIsBoundedAndKeepsSecretsOutOfArguments(t *testing.T) {
+	cfg := testConfig(t)
+	req := baseRequest()
+	req.Action = "router"
+	req.Port = 3319
+	req.MGR = MGR{AdminUser: "aim_cluster_admin", AdminHosts: []string{"10.17.0.12", "10.17.0.13", "10.17.0.89"}}
+	req.Router = Router{ClusterName: "MGR01", BindAddress: "10.17.0.12", RWPort: 6460, Adopt: true}
+	req.Secrets.MGRAdminPassword = "cluster-secret"
+	args, env, err := BuildCommand(req, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, req.Secrets.RootPassword) || strings.Contains(joined, req.Secrets.MGRAdminPassword) {
+		t.Fatal("Router credential leaked into command arguments")
+	}
+	if !strings.Contains(strings.Join(env, "\n"), "AIM_MGR_ADMIN_PASSWORD=cluster-secret") {
+		t.Fatal("Router administrator secret was not passed through the protected environment")
+	}
+	req.Router.RWPort = 65533
+	if err := ValidateRequest(req, cfg); err == nil {
+		t.Fatal("Router base port that cannot reserve four listeners was accepted")
+	}
 }
 
 func TestBuildCommandDoesNotExposeSecrets(t *testing.T) {
@@ -57,6 +83,36 @@ func TestBuildCommandDoesNotExposeSecrets(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(args, " "), "--no-print-secrets") {
 		t.Fatal("secret suppression was not enabled")
+	}
+}
+
+func TestResumeRequestUsesBoundedRecoveryAction(t *testing.T) {
+	cfg := testConfig(t)
+	req := baseRequest()
+	req.Action = "resume"
+	req.Role = "mgr"
+	req.Port = 3319
+	req.ServerID = 101
+	req.MGR = MGR{
+		LocalAddress: "10.17.0.12",
+		Port:         33061,
+		Seeds:        []string{"10.17.0.12:33061", "10.17.0.13:33061", "10.17.0.89:33061"},
+		GroupName:    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		Allowlist:    "10.17.0.12,10.17.0.13,10.17.0.89",
+		RecoveryUser: "aim_mgr",
+	}
+	req.Secrets.MGRRecoveryPassword = "recovery-secret"
+	args, _, err := BuildCommand(req, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "--resume") || !strings.Contains(joined, "--mgr-group-name "+req.MGR.GroupName) {
+		t.Fatalf("resume command lost its bounded topology: %s", joined)
+	}
+	req.Archive = &Archive{Name: "mysql-8.0.46-linux-glibc2.17-x86_64.tar.xz"}
+	if err := ValidateRequest(req, cfg); err == nil || !strings.Contains(err.Error(), "does not accept an archive") {
+		t.Fatalf("resume unexpectedly accepted staged media: %v", err)
 	}
 }
 
@@ -170,5 +226,23 @@ func TestProbeDetectsPortBoundOnAnyAddress(t *testing.T) {
 	}
 	if facts.Ports[port] != "listening" {
 		t.Fatalf("bound port was reported as %q", facts.Ports[port])
+	}
+}
+
+func TestBackupRequestValidationKeepsDatabaseSelectionBounded(t *testing.T) {
+	cfg := testConfig(t)
+	req := baseRequest()
+	req.Action = "backup"
+	req.Backup = &BackupSpec{Databases: []string{"app_db", "audit"}}
+	if err := ValidateRequest(req, cfg); err != nil {
+		t.Fatalf("valid backup request rejected: %v", err)
+	}
+	req.Backup.Databases = []string{"--all-databases"}
+	if err := ValidateRequest(req, cfg); err == nil {
+		t.Fatal("unsafe database name accepted")
+	}
+	req.Backup = &BackupSpec{AllDatabases: true}
+	if err := ValidateRequest(req, cfg); err != nil {
+		t.Fatalf("all-database backup request rejected: %v", err)
 	}
 }
