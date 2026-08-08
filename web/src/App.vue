@@ -2,7 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   Activity, Archive, ChevronRight, CircleUserRound, Database, Eye, FileClock,
-  Gauge, HardDriveUpload, KeyRound, LayoutDashboard, LogOut, Network, Pencil, Play, Plus,
+  Copy, Download, Gauge, HardDriveUpload, KeyRound, LayoutDashboard, LogOut, Network, Pencil, Play, Plus,
   RefreshCw, Server, ShieldCheck, Square, TerminalSquare, Trash2, TriangleAlert, Users
 } from '@lucide/vue'
 import { api, csrfToken, formatBytes, formatTime } from './api'
@@ -31,6 +31,7 @@ const selectedJob = ref(null)
 const jobLogs = ref([])
 const uploadProgress = ref(0)
 const revealedSecret = ref(null)
+const generatedScript = ref(null)
 let eventSource
 
 const loginForm = reactive({ username: '', password: '' })
@@ -97,6 +98,8 @@ watch([() => deploy.version, () => deploy.nodes.map(node => node.host_id).join('
     deploy.media_id = compatibleMedia.value[0]?.id || 0
   }
 })
+
+watch(deploy, () => { generatedScript.value = null }, { deep: true })
 
 function compareVersion(left, right) {
   const a = String(left || '').split('.').map(Number)
@@ -346,21 +349,67 @@ function hostIPs(hostID) {
   return hosts.value.find(host => host.id === Number(hostID))?.facts?.ipv4 || []
 }
 
+function deploymentPayload() {
+  const payload = JSON.parse(JSON.stringify(deploy))
+  payload.media_id = Number(payload.media_id) || 0
+  payload.port = Number(payload.port)
+  payload.mgr_port = Number(payload.mgr_port)
+  payload.router_rw_port = Number(payload.router_rw_port)
+  payload.source_port = Number(payload.source_port)
+  payload.nodes = payload.nodes.map(node => ({ host_id: Number(node.host_id), local_ip: node.local_ip, router_ip: node.router_ip, server_id: Number(node.server_id) || 0 }))
+  return payload
+}
+
 async function createDeployment() {
   await run(async () => {
-    const payload = JSON.parse(JSON.stringify(deploy))
-    payload.media_id = Number(payload.media_id) || 0
-    payload.port = Number(payload.port)
-    payload.mgr_port = Number(payload.mgr_port)
-    payload.router_rw_port = Number(payload.router_rw_port)
-    payload.source_port = Number(payload.source_port)
-    payload.nodes = payload.nodes.map(node => ({ host_id: Number(node.host_id), local_ip: node.local_ip, router_ip: node.router_ip, server_id: Number(node.server_id) || 0 }))
+    const payload = deploymentPayload()
     const result = await api('/deployments', { method: 'POST', body: JSON.stringify(payload) })
     flash(`部署任务 ${result.job_id.slice(0, 8)} 已进入队列`)
     page.value = 'jobs'
     jobs.value = await api('/jobs')
     openJob(result.job_id)
   }).catch(() => {})
+}
+
+async function generateDeploymentScript() {
+  await run(async () => {
+    const payload = deploymentPayload()
+    ;['root_password', 'replication_password', 'source_password', 'mgr_recovery_password', 'mgr_admin_password'].forEach(field => { payload[field] = '' })
+    generatedScript.value = await api('/deployments/script', { method: 'POST', body: JSON.stringify(payload) })
+    flash('已生成不含明文密码的目标机执行脚本')
+    window.setTimeout(() => document.querySelector('.script-export-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 0)
+  }).catch(() => {})
+}
+
+async function copyDeploymentScript() {
+  if (!generatedScript.value?.content) return
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(generatedScript.value.content)
+  } else {
+    const area = document.createElement('textarea')
+    area.value = generatedScript.value.content
+    area.style.position = 'fixed'
+    area.style.opacity = '0'
+    document.body.appendChild(area)
+    area.select()
+    document.execCommand('copy')
+    area.remove()
+  }
+  flash('执行脚本已复制到剪贴板')
+}
+
+function downloadDeploymentScript() {
+  if (!generatedScript.value?.content) return
+  const blob = new Blob([generatedScript.value.content], { type: 'text/x-shellscript;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = generatedScript.value.filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+  flash(`已下载 ${generatedScript.value.filename}`)
 }
 
 async function openJob(id) {
@@ -638,9 +687,10 @@ cd aim-host-kit-2.4.5</code></pre></div></article>
             <fieldset v-if="deploy.mode === 'mgr'"><legend><span>04</span>MySQL Router（可选）</legend><div class="form-grid"><label class="check-label span-2"><input v-model="deploy.deploy_router" type="checkbox">MGR 完成后自动接管为 InnoDB Cluster，并在三个节点部署 MySQL Router</label><template v-if="deploy.deploy_router"><label>InnoDB Cluster 名称<input v-model.trim="deploy.router_cluster_name" placeholder="MGR01" required><small>这是 Router 使用的集群名称，不是上面的组 UUID</small></label><label>Router Classic 读写端口<input v-model.number="deploy.router_rw_port" type="number" min="1" max="65532" required><small>业务连接使用此端口；将同时占用 {{ deploy.router_rw_port + 1 }}、{{ deploy.router_rw_port + 2 }}、{{ deploy.router_rw_port + 3 }}</small></label><label>集群管理账号<input v-model.trim="deploy.mgr_admin_user" required><small>仅允许从三个业务网 IP 登录，不开放远程 root</small></label><label>集群管理密码（可自动生成）<input v-model="deploy.mgr_admin_password" type="password" autocomplete="new-password" placeholder="留空由控制台生成并加密保存"></label><div class="span-2 host-kit-help"><ShieldCheck /><div><strong>端口含义</strong><p><code>{{ deploy.router_rw_port }}</code> = Classic 读写，<code>{{ deploy.router_rw_port + 1 }}</code> = Classic 只读，<code>{{ deploy.router_rw_port + 2 }}</code> = X 协议读写，<code>{{ deploy.router_rw_port + 3 }}</code> = X 协议只读。应用通常连接三个节点任一 Router 的 <code>业务网IP:{{ deploy.router_rw_port }}</code>。</p></div></div></template></div></fieldset>
             <fieldset v-if="['source','replica','replication'].includes(deploy.mode)"><legend><span>03</span>复制参数</legend><div class="form-grid"><label>复制账号<input v-model.trim="deploy.replication_user"></label><label v-if="deploy.mode === 'source'">允许的从库地址<input v-model.trim="deploy.replica_host"></label><label v-if="deploy.mode === 'replica'">源库 IP<input v-model.trim="deploy.source_host" required></label><label v-if="deploy.mode === 'replica'">源库端口<input v-model.number="deploy.source_port" type="number" required></label><label v-if="deploy.mode === 'replica'" class="span-2">源库复制密码<input v-model="deploy.source_password" type="password" required></label><label v-else class="span-2">复制密码（可自动生成）<input v-model="deploy.replication_password" type="password" placeholder="留空由控制台生成"></label></div></fieldset>
             <fieldset><legend><span>{{ deploy.mode === 'mgr' ? '05' : ['source','replica','replication'].includes(deploy.mode) ? '04' : '03' }}</span>凭据</legend><div class="form-grid"><label class="span-2">MySQL root 密码（可自动生成）<input v-model="deploy.root_password" type="password" autocomplete="new-password" placeholder="留空由控制台生成并加密保存"></label></div></fieldset>
-            <div class="wizard-footer"><div><ShieldCheck /><p><strong>提交后不会立即盲目安装</strong><span>控制台会先验证主机、端口、glibc、架构和安装包。</span></p></div><button class="button primary large" :disabled="busy || !hosts.length"><Play />创建部署任务</button></div>
+            <div class="wizard-footer"><div><ShieldCheck /><p><strong>提交后不会立即盲目安装</strong><span>控制台会先验证主机、端口、glibc、架构和安装包。</span></p></div><div class="wizard-actions"><button type="button" class="button secondary large" :disabled="busy || !hosts.length" @click="generateDeploymentScript"><TerminalSquare />生成执行脚本</button><button class="button primary large" :disabled="busy || !hosts.length"><Play />创建部署任务</button></div></div>
           </form>
         </section>
+        <section v-if="generatedScript" class="panel script-export-panel"><div class="panel-head"><div><p class="eyebrow">PORTABLE AIM.SH WRAPPER</p><h3>可复制的目标机执行脚本</h3></div><span class="safety-badge"><ShieldCheck />不含明文密码</span></div><div class="script-export-body"><div class="script-scope"><strong>能力边界</strong><p>脚本覆盖单机、主库、从库、一主一从、三节点 MGR 和可选 MySQL Router。备份计划、懒猫网盘归档、监控历史与审计仍由 Web 控制台和受限执行器管理，不导出为一次性 aim.sh 命令。</p></div><ol><li v-for="instruction in generatedScript.instructions" :key="instruction">{{ instruction }}</li></ol><textarea :value="generatedScript.content" readonly rows="22" spellcheck="false"></textarea><div class="script-export-actions"><span><code>{{ generatedScript.filename }}</code> · 配置变化后请重新生成</span><button type="button" class="button secondary" @click="copyDeploymentScript"><Copy />复制脚本</button><button type="button" class="button primary" @click="downloadDeploymentScript"><Download />下载 .sh</button></div></div></section>
       </div>
 
       <div v-else-if="page === 'instances'" class="page-stack"><section class="panel"><div class="panel-head"><div><p class="eyebrow">INSTANCE LIFECYCLE</p><h3>MySQL 实例</h3></div></div><div class="table-wrap"><table><thead><tr><th>主机</th><th>实例</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="instance in instances" :key="instance.id"><td><strong>{{ instance.host_name }}</strong><small>{{ instance.address }}</small></td><td><span class="mono">{{ instance.version }} :{{ instance.port }}</span></td><td>{{ instance.role }}</td><td><span class="status" :class="statusClass(instance.state)">{{ instance.state }}</span></td><td><div v-if="canOperate" class="row-actions"><button title="启动" @click="instanceAction(instance,'start')"><Play /></button><button title="停止" @click="instanceAction(instance,'stop')"><Square /></button><button title="状态检查" @click="instanceAction(instance,'status')"><Activity /></button><button v-if="isAdmin" class="warning" title="重新初始化" @click="previewDestructive(instance,'reinitialize')"><RefreshCw /></button><button v-if="isAdmin" class="danger" title="卸载" @click="previewDestructive(instance,'uninstall')"><Trash2 /></button></div></td></tr><tr v-if="!instances.length"><td colspan="5" class="empty">暂无由控制台管理的实例</td></tr></tbody></table></div></section>

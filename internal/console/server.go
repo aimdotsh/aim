@@ -102,6 +102,7 @@ func (s *Server) routes() http.Handler {
 	api.Handle("GET /api/v1/media/uploads/{id}", RequireRole("admin", "operator")(http.HandlerFunc(s.getUpload)))
 	api.Handle("PUT /api/v1/media/uploads/{id}/chunks/{index}", RequireRole("admin", "operator")(http.HandlerFunc(s.writeUploadChunk)))
 	api.Handle("POST /api/v1/media/uploads/{id}/complete", RequireRole("admin", "operator")(http.HandlerFunc(s.completeUpload)))
+	api.Handle("POST /api/v1/deployments/script", RequireRole("admin", "operator")(http.HandlerFunc(s.exportDeploymentScript)))
 	api.Handle("POST /api/v1/deployments", RequireRole("admin", "operator")(http.HandlerFunc(s.createDeployment)))
 	api.HandleFunc("GET /api/v1/jobs", s.listJobs)
 	api.HandleFunc("GET /api/v1/jobs/{id}", s.getJob)
@@ -556,6 +557,29 @@ func (s *Server) createDeployment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 202, map[string]string{"job_id": jobID})
+}
+
+func (s *Server) exportDeploymentScript(w http.ResponseWriter, r *http.Request) {
+	var input DeploymentRequest
+	if decodeJSON(w, r, &input, 256<<10) != nil {
+		return
+	}
+	var media *Media
+	if input.MediaID != 0 {
+		loaded, err := s.Jobs.loadMedia(r.Context(), input.MediaID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "所选安装介质不存在")
+			return
+		}
+		media = &loaded
+	}
+	exported, err := BuildDeploymentScript(input, media)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.Store.Audit(r.Context(), UserFromContext(r.Context()), remoteIP(r), "deployment_script_export", "deployment", input.Name, fmt.Sprintf(`{"mode":%q,"version":%q,"port":%d,"secrets_omitted":true}`, input.Mode, input.Version, input.Port))
+	writeJSON(w, http.StatusOK, exported)
 }
 
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {

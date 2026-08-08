@@ -11,6 +11,7 @@ AIM 现在同时提供内网 Web 部署控制台。控制台以 Go 单体应用�
 - 登记主机并自动探测 Linux、CPU、glibc、IPv4、内存、磁盘和端口。
 - 以 16 MiB 分块断点上传最大 2 GiB 的 MySQL 安装包，并校验 SHA-256。
 - 部署单机、主库、从库、一主一从和固定三节点 MGR。
+- 将部署向导中的拓扑、端口、网络和安装介质配置导出为不含明文密码的目标机 Bash 脚本，支持预览、复制和下载。
 - 查看实时任务日志，管理实例启停、重新初始化和卸载。
 - 使用本地 RBAC、SSH 指纹固定、AES-256-GCM 密码保险箱和审计日志。
 - 创建手动或 Cron 定时在线备份，备份文件通过 SFTP 下载到当前懒猫用户的私有文稿，并校验 SHA-256。
@@ -34,6 +35,31 @@ docker compose up -d --build
 本机访问默认使用 `https://localhost:8443`。从其他电脑通过内网 IP 访问前，需要把该 IP 加入 `.env` 的 `AIM_TLS_HOSTS` 并重新创建 Caddy 容器。
 
 Web 控制台是可选功能；只使用命令行时仍然只需下载一个 `aim.sh`。
+
+## 从 Web 配置导出目标机脚本
+
+“部署向导”底部的“生成执行脚本”会把当前配置转换为 Host Kit 可执行的 Bash 包装脚本。生成文件不会包含页面中填写的 root、复制、MGR 恢复或集群管理密码；运行时会在目标机终端静默询问，也可由自动化系统通过对应的 `AIM_*_PASSWORD` 环境变量提供。
+
+脚本能力与组件边界如下：
+
+- `aim.sh`：单机、主库、从库、一主一从和三节点 MGR 安装，以及启动、停止、状态检查、重新初始化和卸载。
+- `router.sh`：MGR 完成后的 InnoDB Cluster 接管和 MySQL Router 部署。导出的 MGR+Router 脚本提供独立的 `install`、`router` 两个阶段。
+- `aim-executor` 与 Web 控制台：在线备份、Cron 调度、备份保留、懒猫网盘归档、监控历史、SSH 指纹、权限和审计。这些能力不会被导出为一次性脚本。
+
+目标机需先安装 Host Kit 2.4.5。单节点示例：
+
+```bash
+chmod 700 aim-production-mysql.sh
+sudo bash ./aim-production-mysql.sh install
+```
+
+多节点使用同一份脚本，脚本根据页面填写的业务网 IP 自动判断当前节点；无法自动识别时可显式指定：
+
+```bash
+sudo AIM_NODE_INDEX=2 bash ./aim-primary-mgr.sh install
+```
+
+MGR+Router 必须先按节点 1、2、3 顺序完成 `install`，确认三节点均为 `ONLINE` 后，再按节点 1、2、3 顺序执行 `router`。如果页面选择了上传介质，还需把对应 MySQL 压缩包复制到目标机，脚本会先校验页面记录的 SHA-256；也可以通过 `AIM_ARCHIVE_PATH` 指定文件位置。
 
 ## 在线备份与健康监控
 

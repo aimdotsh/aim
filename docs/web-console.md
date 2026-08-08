@@ -17,6 +17,8 @@ AIM Web 控制台是单实例内网运维平台：
 - 只以参数数组调用 root-owned `aim.sh`，不使用 shell 拼接命令。
 - 通过环境变量传递 MySQL 密码，启用 `--no-print-secrets`，并对远程输出再次脱敏。
 
+部署向导也可以导出一个不含明文密码的 Bash 包装脚本。该脚本在目标机调用 Host Kit 安装的 `/opt/aim/aim.sh`；启用 Router 时另提供 `router` 阶段调用 `/opt/aim/router.sh`。密码只在目标机静默输入，不会写入浏览器预览、下载文件、Shell 历史或命令行参数。备份、调度、监控历史、网盘归档和审计仍需 Web 控制台与 `aim-executor`。
+
 控制台将 MySQL 密码和 SSH 私钥使用 AES-256-GCM 加密后写入 SQLite。主密钥不存在数据库中，由 Docker secret 单独挂载。
 
 ## 启动控制台

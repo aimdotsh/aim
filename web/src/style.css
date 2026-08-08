@@ -201,6 +201,16 @@ td small { margin-top: 4px; color: #8894a4; }
 .wizard-footer p { margin: 0; }
 .wizard-footer p strong, .wizard-footer p span { display: block; }
 .wizard-footer p strong { color: #314257; font-size: 12px; }.wizard-footer p span { margin-top: 3px; color: #8290a1; font-size: 11px; }
+.wizard-actions { justify-content: flex-end; }
+.script-export-body { display: grid; gap: 18px; padding: 24px 28px 28px; }
+.script-export-body ol { margin: 0; padding-left: 22px; color: #536377; font-size: 12px; line-height: 1.8; }
+.script-export-body textarea { min-height: 420px; padding: 18px; color: #c7d3df; border-color: #26384d; background: #101a29; font-size: 11px; line-height: 1.65; }
+.script-scope { display: flex; align-items: flex-start; gap: 14px; padding: 15px 17px; border: 1px solid #d6e5e2; border-radius: 8px; color: #526e6a; background: #f0f8f6; }
+.script-scope strong { flex: 0 0 auto; color: #187b71; font-size: 12px; }
+.script-scope p { margin: 0; font-size: 11px; line-height: 1.7; }
+.script-export-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.script-export-actions > span { min-width: 0; margin-right: auto; color: #7b899b; font-size: 11px; }
+.script-export-actions code { color: #315651; }
 
 .row-actions { display: flex; gap: 5px; }
 .row-actions button { width: 31px; height: 31px; display: grid; place-items: center; border: 1px solid #dce3e9; border-radius: 6px; color: #536377; background: white; }
