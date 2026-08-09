@@ -217,7 +217,59 @@ func (s *Server) listHosts(w http.ResponseWriter, r *http.Request) {
 		host.LastSeenAt = scanNullableTime(lastSeen)
 		hosts = append(hosts, host)
 	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "读取主机失败")
+		return
+	}
+	if err := rows.Close(); err != nil {
+		writeError(w, http.StatusInternalServerError, "读取主机失败")
+		return
+	}
+	for index := range hosts {
+		reason, err := hostDeletionBlockReason(r.Context(), s.Store.DB, hosts[index].ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "检查主机删除条件失败")
+			return
+		}
+		hosts[index].CanDelete = reason == ""
+		hosts[index].DeleteBlockReason = reason
+	}
 	writeJSON(w, 200, hosts)
+}
+
+type hostDeletionQuerier interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func hostDeletionBlockReason(ctx context.Context, query hostDeletionQuerier, hostID int64) (string, error) {
+	var instances, failedDeployments, activeJobs, activeLocks int
+	err := query.QueryRowContext(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM instances WHERE host_id=?),
+			(SELECT COUNT(*) FROM jobs j,
+				json_each(CASE WHEN json_valid(j.payload_json) THEN j.payload_json ELSE '{}' END,'$.nodes') node
+			 WHERE j.kind='deployment' AND j.state='failed'
+			   AND CAST(json_extract(node.value,'$.host_id') AS INTEGER)=?),
+			(SELECT COUNT(*) FROM job_hosts jh JOIN jobs j ON j.id=jh.job_id
+			 WHERE jh.host_id=? AND j.state NOT IN ('complete','failed','cleaned')),
+			(SELECT COUNT(*) FROM host_locks hl JOIN jobs j ON j.id=hl.job_id
+			 WHERE hl.host_id=? AND j.state NOT IN ('complete','failed','cleaned'))`,
+		hostID, hostID, hostID, hostID).Scan(&instances, &failedDeployments, &activeJobs, &activeLocks)
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case instances > 0:
+		return "该主机仍有关联的 MySQL 实例，不能删除；请先在“MySQL 实例”页面卸载", nil
+	case failedDeployments > 0:
+		return "该主机仍关联可清理的失败部署任务；请先清理失败安装，或删除对应失败任务记录后再删除主机", nil
+	case activeJobs > 0:
+		return "该主机仍有运行中或待核实任务，不能删除", nil
+	case activeLocks > 0:
+		return "该主机仍有任务锁，不能删除", nil
+	default:
+		return "", nil
+	}
 }
 
 var hostnamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$`)
@@ -370,24 +422,14 @@ func (s *Server) deleteHost(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	for _, dependency := range []struct {
-		query   string
-		message string
-	}{
-		{`SELECT COUNT(*) FROM instances WHERE host_id=?`, "该主机仍有关联的 MySQL 实例，不能删除"},
-		{`SELECT COUNT(*) FROM jobs j, json_each(j.payload_json,'$.nodes') node WHERE j.kind='deployment' AND j.state='failed' AND CAST(json_extract(node.value,'$.host_id') AS INTEGER)=?`, "该主机仍关联可清理的失败部署任务；请先清理失败安装，或删除对应失败任务记录后再删除主机"},
-		{`SELECT COUNT(*) FROM job_hosts jh JOIN jobs j ON j.id=jh.job_id WHERE jh.host_id=? AND j.state NOT IN ('complete','failed','cleaned')`, "该主机仍有运行中或待核实任务，不能删除"},
-		{`SELECT COUNT(*) FROM host_locks hl JOIN jobs j ON j.id=hl.job_id WHERE hl.host_id=? AND j.state NOT IN ('complete','failed','cleaned')`, "该主机仍有任务锁，不能删除"},
-	} {
-		var count int
-		if err := tx.QueryRowContext(r.Context(), dependency.query, id).Scan(&count); err != nil {
-			writeError(w, http.StatusInternalServerError, "检查主机关联数据失败")
-			return
-		}
-		if count > 0 {
-			writeError(w, http.StatusConflict, dependency.message)
-			return
-		}
+	deleteBlockReason, err := hostDeletionBlockReason(r.Context(), tx, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "检查主机关联数据失败")
+		return
+	}
+	if deleteBlockReason != "" {
+		writeError(w, http.StatusConflict, deleteBlockReason)
+		return
 	}
 	if _, err := tx.ExecContext(r.Context(), `DELETE FROM host_locks WHERE host_id=? AND job_id IN (SELECT id FROM jobs WHERE state IN ('complete','failed','cleaned'))`, id); err != nil {
 		writeError(w, http.StatusInternalServerError, "清理已结束任务锁失败")

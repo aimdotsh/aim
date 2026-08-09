@@ -64,6 +64,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--teal); box-shado
 .button.secondary { color: #2d455f; background: #edf2f5; }
 .button.ghost { color: #4d5e73; border: 1px solid var(--line); background: white; }
 .button.danger { color: white; background: var(--danger); }
+.delete-host-action { display: inline-flex; }
 .button.wide { width: 100%; margin-top: 28px; min-height: 48px; }
 .button.large { min-height: 48px; padding-inline: 24px; }
 .compact-button { min-height: 34px; padding: 6px 10px; }

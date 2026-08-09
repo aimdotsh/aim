@@ -384,6 +384,46 @@ func TestConfirmedHostCanBeDeletedBeforeFirstProbe(t *testing.T) {
 	}
 }
 
+func TestHostListExposesDeletionAvailabilityAndReason(t *testing.T) {
+	store := testStore(t)
+	if _, err := store.BootstrapAdmin(context.Background(), "admin", "very-strong-admin-password"); err != nil {
+		t.Fatal(err)
+	}
+	now := "2026-08-09T00:00:00Z"
+	result, err := store.DB.Exec(`INSERT INTO hosts(name,address,ssh_port,ssh_user,private_key_cipher,status,created_at,updated_at) VALUES('database-host','192.0.2.20',22,'aimops','encrypted','online',?,?)`, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	databaseHostID, _ := result.LastInsertId()
+	if _, err := store.DB.Exec(`INSERT INTO hosts(name,address,ssh_port,ssh_user,private_key_cipher,status,created_at,updated_at) VALUES('empty-host','192.0.2.21',22,'aimops','encrypted','online',?,?)`, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`INSERT INTO instances(host_id,version,port,role,service,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, databaseHostID, "8.0.46", 3306, "standalone", "aim-mysql-3306", "online", now, now); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{Store: store}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/hosts", nil)
+	response := httptest.NewRecorder()
+	server.listHosts(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("host list failed: %d %s", response.Code, response.Body.String())
+	}
+	var hosts []map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &hosts); err != nil {
+		t.Fatal(err)
+	}
+	states := map[string]map[string]any{}
+	for _, host := range hosts {
+		states[host["name"].(string)] = host
+	}
+	if states["database-host"]["can_delete"] != false || !strings.Contains(states["database-host"]["delete_block_reason"].(string), "MySQL 实例") {
+		t.Fatalf("database host was not disabled with an actionable reason: %+v", states["database-host"])
+	}
+	if states["empty-host"]["can_delete"] != true || states["empty-host"]["delete_block_reason"] != "" {
+		t.Fatalf("empty host was not deletable: %+v", states["empty-host"])
+	}
+}
+
 func TestDeletionRejectsUnsafeStates(t *testing.T) {
 	store := testStore(t)
 	if _, err := store.BootstrapAdmin(context.Background(), "admin", "very-strong-admin-password"); err != nil {

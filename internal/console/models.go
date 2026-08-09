@@ -21,6 +21,8 @@ type Host struct {
 	Status             string         `json:"status"`
 	LastError          string         `json:"last_error"`
 	LastSeenAt         *time.Time     `json:"last_seen_at,omitempty"`
+	CanDelete          bool           `json:"can_delete"`
+	DeleteBlockReason  string         `json:"delete_block_reason"`
 }
 
 type Media struct {
