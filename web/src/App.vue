@@ -6,6 +6,9 @@ import {
   RefreshCw, Server, ShieldCheck, Square, TerminalSquare, Trash2, TriangleAlert, Users
 } from '@lucide/vue'
 import { api, csrfToken, formatBytes, formatTime } from './api'
+import packageMetadata from '../package.json'
+
+const appVersion = packageMetadata.version
 
 const user = ref(null)
 const authConfig = ref({ local_enabled: true, oidc_enabled: false })
@@ -273,7 +276,7 @@ async function probeHost(host) {
 
 async function deleteHost(host) {
   if (!host.can_delete) {
-    error.value = host.delete_block_reason || '该主机当前不能删除'
+    error.value = `无法删除主机“${host.name}”：${host.delete_block_reason || '该主机当前仍有关联资源'}`
     return
   }
   const confirmed = window.confirm(
@@ -656,8 +659,8 @@ onMounted(restoreSession)
 
   <div v-else class="app-shell">
     <aside class="sidebar">
-      <div class="brand-mark light compact">aim<span>.sh</span></div>
-      <div class="environment"><span></span>内网控制平面</div>
+      <div class="sidebar-brand"><div class="brand-mark light compact">aim<span>.sh</span></div><small class="app-version">版本 v{{ appVersion }}</small></div>
+      <div class="environment"><span></span>aim.sh MySQL 控制台</div>
       <nav aria-label="主导航">
         <button v-for="item in navigation" :key="item.id" :class="{ active: page === item.id }" @click="page = item.id">
           <component :is="item.icon" /><span>{{ item.label }}</span>
@@ -703,7 +706,7 @@ cd aim-host-kit-2.4.13</code></pre></div></article>
           <form class="form-grid host-form" @submit.prevent="updateHost"><label>主机名称<input v-model.trim="editHostForm.name" required></label><label>IP 或域名<input v-model.trim="editHostForm.address" required></label><label>SSH 端口<input v-model.number="editHostForm.ssh_port" type="number" min="1" max="65535" required></label><label>SSH 用户<input v-model.trim="editHostForm.ssh_user" required></label><label class="button secondary span-2">重新导入专用私钥（可选）<input type="file" hidden @change="importEditPrivateKey"></label><label class="span-2">新 SSH 私钥 <small v-if="editPrivateKeyFilename">已导入：{{ editPrivateKeyFilename }}</small><textarea v-model="editHostForm.private_key" rows="4" placeholder="留空则继续使用原私钥；不要填写 .pub 公钥"></textarea><small>修改地址、端口、SSH 用户或私钥后，旧主机指纹会失效，必须重新确认。</small></label><div class="form-actions span-2"><button type="button" class="button ghost" @click="cancelEditHost">取消</button><button class="button primary" :disabled="busy"><Pencil />保存修改</button></div></form>
         </section>
         <section class="panel"><div class="panel-head"><div><p class="eyebrow">INVENTORY</p><h3>主机资源</h3></div></div>
-          <div class="card-grid"><article v-for="host in hosts" :key="host.id" class="host-card"><div class="host-card-head"><span class="server-glyph"><Server /></span><div><h4>{{ host.name }}</h4><span class="mono">{{ host.address }}:{{ host.ssh_port }}</span></div><span class="status" :class="statusClass(host.status)">{{ host.status }}</span></div><dl><div><dt>系统</dt><dd>{{ host.facts?.os_name || '等待探测' }}</dd></div><div><dt>架构 / glibc</dt><dd>{{ host.facts?.architecture || '—' }} / {{ host.facts?.glibc || '—' }}</dd></div><div><dt>IPv4</dt><dd>{{ host.facts?.ipv4?.join(', ') || '—' }}</dd></div><div><dt>资源</dt><dd>{{ host.facts?.cpus || '—' }} CPU · {{ host.facts?.memory_mb || '—' }} MiB</dd></div></dl><div class="card-actions"><button v-if="isAdmin" class="button secondary" @click="startEditHost(host)"><Pencil />修改</button><button v-if="isAdmin && !host.host_key_fingerprint" class="button secondary" @click="trustFingerprint(host)"><KeyRound />确认指纹</button><button v-if="canOperate && host.host_key_fingerprint" class="button secondary" @click="probeHost(host)"><Activity />重新探测</button><span v-if="isAdmin" class="delete-host-action" :title="host.can_delete ? '删除控制台中的空主机记录' : host.delete_block_reason"><button class="button danger" :disabled="!host.can_delete" @click="deleteHost(host)"><Trash2 />删除空主机</button></span></div><p v-if="host.last_error" class="inline-error">{{ host.last_error }}</p></article><div v-if="!hosts.length" class="empty-card">还没有受管主机，请先添加专用 aimops SSH 账号。</div></div>
+          <div class="card-grid"><article v-for="host in hosts" :key="host.id" class="host-card"><div class="host-card-head"><span class="server-glyph"><Server /></span><div><h4>{{ host.name }}</h4><span class="mono">{{ host.address }}:{{ host.ssh_port }}</span></div><span class="status" :class="statusClass(host.status)">{{ host.status }}</span></div><dl><div><dt>系统</dt><dd>{{ host.facts?.os_name || '等待探测' }}</dd></div><div><dt>架构 / glibc</dt><dd>{{ host.facts?.architecture || '—' }} / {{ host.facts?.glibc || '—' }}</dd></div><div><dt>IPv4</dt><dd>{{ host.facts?.ipv4?.join(', ') || '—' }}</dd></div><div><dt>资源</dt><dd>{{ host.facts?.cpus || '—' }} CPU · {{ host.facts?.memory_mb || '—' }} MiB</dd></div></dl><div class="card-actions"><button v-if="isAdmin" class="button secondary" @click="startEditHost(host)"><Pencil />修改</button><button v-if="isAdmin && !host.host_key_fingerprint" class="button secondary" @click="trustFingerprint(host)"><KeyRound />确认指纹</button><button v-if="canOperate && host.host_key_fingerprint" class="button secondary" @click="probeHost(host)"><Activity />重新探测</button><span v-if="isAdmin" class="delete-host-action"><button class="button danger" :class="{ 'is-disabled': !host.can_delete }" :aria-disabled="!host.can_delete" :title="host.can_delete ? '删除控制台中的空主机记录' : host.delete_block_reason" @click="deleteHost(host)"><Trash2 />删除空主机</button><span v-if="!host.can_delete" class="action-tooltip" role="tooltip">{{ host.delete_block_reason || '该主机当前仍有关联资源' }}</span></span></div><p v-if="host.last_error" class="inline-error">{{ host.last_error }}</p></article><div v-if="!hosts.length" class="empty-card">还没有受管主机，请先添加专用 aimops SSH 账号。</div></div>
         </section>
       </div>
 

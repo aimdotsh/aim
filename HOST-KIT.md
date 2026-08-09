@@ -30,4 +30,4 @@ sudo /tmp/aim-bootstrap-20260715120000-12345/install-staged-target.sh
 
 安装成功后，在 AIM 页面填写主机信息，并导入 `~/.ssh/aim/aim_console_ed25519`。不要导入 `.pub` 文件。
 
-Host Kit 2.4.13 是控制台 1.0.34 的配套版本。它会对新解压和已存在的 MySQL Router 工具目录进行幂等权限归一化，避免 `mysqlrouter` 服务用户因归档目录的 `root:root 0750` 权限而触发 `203/EXEC Permission denied`；端口就绪失败时还会输出 systemd 状态和最近 journal。重复安装只会更新受限工具，不会删除现有 MySQL 数据。
+Host Kit 2.4.13 是控制台 1.0.34 及以上版本的配套版本。它会对新解压和已存在的 MySQL Router 工具目录进行幂等权限归一化，避免 `mysqlrouter` 服务用户因归档目录的 `root:root 0750` 权限而触发 `203/EXEC Permission denied`；端口就绪失败时还会输出 systemd 状态和最近 journal。重复安装只会更新受限工具，不会删除现有 MySQL 数据。

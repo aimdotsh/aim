@@ -29,7 +29,9 @@ svg { width: 19px; height: 19px; stroke-width: 1.8; }
 .brand-mark { color: var(--navy); font-size: 42px; line-height: 1; font-weight: 850; letter-spacing: -2.5px; }
 .brand-mark span { color: var(--teal); }
 .brand-mark.light { color: white; }
-.brand-mark.compact { font-size: 31px; padding: 7px 12px 24px; }
+.brand-mark.compact { font-size: 31px; padding: 7px 12px 5px; }
+.sidebar-brand { margin-bottom: 18px; }
+.app-version { display: block; padding: 0 12px; color: #60748d; font-size: 10px; font-weight: 650; letter-spacing: .08em; }
 .eyebrow { margin: 0 0 8px; color: #718096; font-size: 11px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
 
 .login-page { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(420px, .6fr); background: var(--navy); }
@@ -58,13 +60,16 @@ input:focus, select:focus, textarea:focus { border-color: var(--teal); box-shado
 .login-card input { padding: 14px; }
 
 .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 9px 15px; border: 0; border-radius: 7px; font-weight: 750; font-size: 13px; transition: transform .15s, background .2s, box-shadow .2s; }
-.button:hover:not(:disabled) { transform: translateY(-1px); }
+.button:hover:not(:disabled):not(.is-disabled) { transform: translateY(-1px); }
 .button.primary { color: white; background: var(--teal-dark); box-shadow: 0 7px 18px rgba(8,118,110,.18); }
 .button.primary:hover:not(:disabled) { background: #066760; }
 .button.secondary { color: #2d455f; background: #edf2f5; }
 .button.ghost { color: #4d5e73; border: 1px solid var(--line); background: white; }
 .button.danger { color: white; background: var(--danger); }
-.delete-host-action { display: inline-flex; }
+.delete-host-action { position: relative; display: inline-flex; }
+.button.is-disabled { cursor: not-allowed; opacity: .55; }
+.action-tooltip { position: absolute; z-index: 12; right: 0; bottom: calc(100% + 8px); width: max-content; max-width: min(340px, 72vw); padding: 8px 10px; border: 1px solid #efc6cb; border-radius: 6px; color: #8e2d39; background: #fff4f5; box-shadow: 0 8px 24px rgba(20,36,58,.16); font-size: 11px; font-weight: 650; line-height: 1.5; pointer-events: none; opacity: 0; transform: translateY(4px); transition: opacity .15s, transform .15s; }
+.delete-host-action:hover .action-tooltip, .delete-host-action:focus-within .action-tooltip { opacity: 1; transform: translateY(0); }
 .button.wide { width: 100%; margin-top: 28px; min-height: 48px; }
 .button.large { min-height: 48px; padding-inline: 24px; }
 .compact-button { min-height: 34px; padding: 6px 10px; }
