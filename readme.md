@@ -46,7 +46,7 @@ Web 控制台是可选功能；只使用命令行时仍然只需下载一个 `ai
 - `router.sh`：MGR 完成后的 InnoDB Cluster 接管和 MySQL Router 部署。导出的 MGR+Router 脚本提供独立的 `install`、`router` 两个阶段。
 - `aim-executor` 与 Web 控制台：在线备份、Cron 调度、备份保留、懒猫网盘归档、监控历史、SSH 指纹、权限和审计。这些能力不会被导出为一次性脚本。
 
-目标机需先安装 Host Kit 2.4.9。单节点示例：
+目标机需先安装 Host Kit 2.4.10。单节点示例：
 
 ```bash
 chmod 700 aim-production-mysql.sh

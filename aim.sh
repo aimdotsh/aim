@@ -434,6 +434,18 @@ validate_inputs() {
     [[ -n "$SERVER_ID" ]] || SERVER_ID="$(( (PORT * 1009 + 17) % 4294967294 + 1 ))"
 }
 
+classify_os_family() {
+    local os_id os_like
+    os_id="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+    os_like="$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')"
+    case "${os_like} ${os_id}" in
+        *rhel*|*fedora*|*centos*|*rocky*|*almalinux*|*opencloudos*|*ol*) printf 'rhel\n' ;;
+        *debian*|*ubuntu*) printf 'debian\n' ;;
+        *suse*|*sles*) printf 'suse\n' ;;
+        *) return 1 ;;
+    esac
+}
+
 detect_platform() {
     local os_like os_pretty ldd_output
     [[ "$(uname -s)" == Linux ]] || die "only Linux is supported by Oracle's generic MySQL server binaries"
@@ -446,13 +458,9 @@ detect_platform() {
     os_like="$(. /etc/os-release; printf '%s' "${ID_LIKE:-}")"
     # shellcheck disable=SC1091
     os_pretty="$(. /etc/os-release; printf '%s' "${PRETTY_NAME:-}")"
-    OS_ID="${OS_ID,,}"
-    case "${os_like} ${OS_ID}" in
-        *rhel*|*fedora*|*centos*|*rocky*|*almalinux*|*ol*) OS_FAMILY="rhel" ;;
-        *debian*|*ubuntu*) OS_FAMILY="debian" ;;
-        *suse*|*sles*) OS_FAMILY="suse" ;;
-        *) die "unsupported distribution: ${os_pretty:-$OS_ID}; supported families: RHEL, Debian/Ubuntu, SUSE" ;;
-    esac
+    OS_ID="$(printf '%s' "$OS_ID" | tr '[:upper:]' '[:lower:]')"
+    OS_FAMILY="$(classify_os_family "$OS_ID" "$os_like")" ||
+        die "unsupported distribution: ${os_pretty:-$OS_ID}; supported families: RHEL, Debian/Ubuntu, SUSE"
 
     case "$(uname -m)" in
         x86_64|amd64) ARCH="x86_64" ;;
