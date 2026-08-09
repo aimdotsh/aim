@@ -659,8 +659,7 @@ onMounted(restoreSession)
 
   <div v-else class="app-shell">
     <aside class="sidebar">
-      <div class="sidebar-brand"><div class="brand-mark light compact">aim<span>.sh</span></div><small class="app-version">版本 v{{ appVersion }}</small></div>
-      <div class="environment"><span></span>aim.sh MySQL 控制台</div>
+      <div class="sidebar-brand"><div class="brand-mark light compact console-brand-title">aim<span>.sh</span><strong>MySQL 控制台</strong></div><small class="app-version">版本 v{{ appVersion }}</small></div>
       <nav aria-label="主导航">
         <button v-for="item in navigation" :key="item.id" :class="{ active: page === item.id }" @click="page = item.id">
           <component :is="item.icon" /><span>{{ item.label }}</span>
