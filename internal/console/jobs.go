@@ -285,6 +285,13 @@ func (m *JobManager) CreateFailedDeploymentCleanup(ctx context.Context, user *Us
 		return "", "", errors.New("原部署规格已损坏")
 	}
 	for _, node := range deployment.Nodes {
+		var hosts int
+		if err := m.Store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM hosts WHERE id=?`, node.HostID).Scan(&hosts); err != nil {
+			return "", "", err
+		}
+		if hosts == 0 {
+			return "", "", fmt.Errorf("原部署任务引用的主机 %d 已被删除，无法通过 SSH 清理远端残留；请删除该失败任务记录", node.HostID)
+		}
 		var instances int
 		if err := m.Store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM instances WHERE host_id=? AND port=?`, node.HostID, deployment.Port).Scan(&instances); err != nil {
 			return "", "", err

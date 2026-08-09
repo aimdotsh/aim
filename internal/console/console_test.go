@@ -425,6 +425,70 @@ func TestDeletionRejectsUnsafeStates(t *testing.T) {
 	}
 }
 
+func TestFailedDeploymentCleanupRejectsDeletedHostsBeforeCreatingJob(t *testing.T) {
+	store := testStore(t)
+	if _, err := store.BootstrapAdmin(context.Background(), "admin", "very-strong-admin-password"); err != nil {
+		t.Fatal(err)
+	}
+	deployment := DeploymentRequest{
+		Name:    "deleted-host-cleanup",
+		Mode:    "single",
+		Version: "8.0.46",
+		Port:    3306,
+		Nodes:   []DeploymentNode{{HostID: 99}},
+	}
+	payload, err := json.Marshal(deployment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`INSERT INTO jobs(id,kind,state,payload_json,created_by,created_at) VALUES('failed-deleted-host','deployment','failed',?,1,'2026-08-09T00:00:00Z')`, payload); err != nil {
+		t.Fatal(err)
+	}
+	manager := &JobManager{Store: store}
+	_, _, err = manager.CreateFailedDeploymentCleanup(context.Background(), &User{ID: 1, Username: "admin", Role: "admin", Active: true}, "127.0.0.1", "failed-deleted-host", FailedDeploymentCleanupInput{DryRun: true})
+	if err == nil || !strings.Contains(err.Error(), "主机 99 已被删除") {
+		t.Fatalf("deleted host did not produce an actionable cleanup error: %v", err)
+	}
+	var count int
+	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM jobs`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("failed cleanup left a partial job: count=%d err=%v", count, err)
+	}
+}
+
+func TestHostDeletionRequiresFailedDeploymentResolution(t *testing.T) {
+	store := testStore(t)
+	if _, err := store.BootstrapAdmin(context.Background(), "admin", "very-strong-admin-password"); err != nil {
+		t.Fatal(err)
+	}
+	now := "2026-08-09T00:00:00Z"
+	hostResult, err := store.DB.Exec(`INSERT INTO hosts(name,address,ssh_port,ssh_user,private_key_cipher,status,created_at,updated_at) VALUES('failed-host','192.0.2.99',22,'aimops','encrypted','error',?,?)`, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostID, _ := hostResult.LastInsertId()
+	deployment := DeploymentRequest{Name: "failed-host", Mode: "single", Version: "8.0.46", Port: 3306, Nodes: []DeploymentNode{{HostID: hostID}}}
+	payload, _ := json.Marshal(deployment)
+	if _, err := store.DB.Exec(`INSERT INTO jobs(id,kind,state,payload_json,created_by,created_at) VALUES('failed-host-job','deployment','failed',?,1,?)`, payload, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`INSERT INTO job_hosts(job_id,host_id,step_order,state) VALUES('failed-host-job',?,0,'failed')`, hostID); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{Store: store}
+	request := httptest.NewRequest(http.MethodDelete, "/", nil)
+	request.SetPathValue("id", "1")
+	request = request.WithContext(context.WithValue(request.Context(), userContextKey, &User{ID: 1, Username: "admin", Role: "admin", Active: true}))
+	response := httptest.NewRecorder()
+	server.deleteHost(response, request)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "先清理失败安装") {
+		t.Fatalf("host with unresolved failed deployment was not protected: %d %s", response.Code, response.Body.String())
+	}
+	var count int
+	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM hosts WHERE id=?`, hostID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("protected host was deleted: count=%d err=%v", count, err)
+	}
+}
+
 func TestOIDCUserProvisioningAndRoleSync(t *testing.T) {
 	store := testStore(t)
 	if _, err := store.BootstrapAdmin(context.Background(), "existing", "very-strong-admin-password"); err != nil {

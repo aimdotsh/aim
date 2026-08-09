@@ -375,6 +375,7 @@ func (s *Server) deleteHost(w http.ResponseWriter, r *http.Request) {
 		message string
 	}{
 		{`SELECT COUNT(*) FROM instances WHERE host_id=?`, "该主机仍有关联的 MySQL 实例，不能删除"},
+		{`SELECT COUNT(*) FROM jobs j, json_each(j.payload_json,'$.nodes') node WHERE j.kind='deployment' AND j.state='failed' AND CAST(json_extract(node.value,'$.host_id') AS INTEGER)=?`, "该主机仍关联可清理的失败部署任务；请先清理失败安装，或删除对应失败任务记录后再删除主机"},
 		{`SELECT COUNT(*) FROM job_hosts jh JOIN jobs j ON j.id=jh.job_id WHERE jh.host_id=? AND j.state NOT IN ('complete','failed')`, "该主机仍有运行中或待核实任务，不能删除"},
 		{`SELECT COUNT(*) FROM host_locks hl JOIN jobs j ON j.id=hl.job_id WHERE hl.host_id=? AND j.state NOT IN ('complete','failed')`, "该主机仍有任务锁，不能删除"},
 	} {

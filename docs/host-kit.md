@@ -14,7 +14,7 @@
 - `/var/lib/aim-staging` 以及每个任务独立的暂存目录；
 - 仅允许 `aimops` 无密码运行指定执行器的 sudo 规则。
 
-重新执行新版 Host Kit 是幂等的，不会删除 MySQL 数据。升级到控制台 1.0.30 后，应在每台目标机重新执行一次 2.4.12。该版本修复 Router 下载函数在 Bash `nounset` 模式下引用未绑定 `filename` 的问题，并保留受限的 `cleanup_failed` 协议动作、OpenCloudOS、低内存、Ubuntu 24.04 和 systemd 诊断改进。
+重新执行新版 Host Kit 是幂等的，不会删除 MySQL 数据。升级到控制台 1.0.31 后，应在每台目标机重新执行一次 2.4.12。该版本修复 Router 下载函数在 Bash `nounset` 模式下引用未绑定 `filename` 的问题，并保留受限的 `cleanup_failed` 协议动作、OpenCloudOS、低内存、Ubuntu 24.04 和 systemd 诊断改进。
 
 对于内存不超过 3 GiB 的测试主机，新建实例默认使用 `innodb_buffer_pool_size = 128M`。如果首次启动因主机负载过高而超时，但 MySQL 随后已经正常监听，控制台会核验 AIM 配置、版本、server_id、MGR 拓扑和保存的 root 凭据，全部一致后才继续部署；不会接管不属于 AIM 的实例，也不会覆盖用户已经修改的 Buffer Pool。
 
