@@ -115,9 +115,19 @@ download_verified() {
     printf '%s' "$destination"
 }
 
+normalize_tool_permissions() {
+    local destination="$1"
+    [[ -d "$destination" ]] || die "tool directory is missing: $destination"
+    chown -R root:root "$destination"
+    chmod -R u=rwX,go=rX "$destination"
+}
+
 extract_tool() {
     local archive="$1" destination="$2" expected_binary="$3" temp root entry
-    [[ -x "$destination/$expected_binary" ]] && return
+    if [[ -x "$destination/$expected_binary" ]]; then
+        normalize_tool_permissions "$destination"
+        return
+    fi
     temp="$(mktemp -d /var/tmp/aim-tool.XXXXXX)"
     while IFS= read -r entry; do
         [[ "$entry" != /* && "/$entry/" != *"/../"* ]] || { rm -rf -- "$temp"; die "unsafe path in $(basename -- "$archive")"; }
@@ -128,6 +138,7 @@ extract_tool() {
     rm -rf -- "$destination"
     mv -- "$root" "$destination"
     rm -rf -- "$temp"
+    normalize_tool_permissions "$destination"
 }
 
 install -d -o root -g root -m 0755 "$CACHE_ROOT" "$TOOLS_ROOT"
@@ -237,7 +248,16 @@ for attempt in {1..60}; do
     fi
     sleep 1
 done
-port_open "$RW_PORT" || die "Router read/write port did not become ready"
+if ! port_open "$RW_PORT"; then
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        log "Router service diagnostics follow"
+        systemctl show "$SERVICE_NAME" \
+            -p ActiveState -p SubState -p MainPID -p ExecMainCode -p ExecMainStatus -p NRestarts \
+            --no-pager >&2 || true
+        journalctl -u "$SERVICE_NAME" -n 30 --no-pager -o short-iso >&2 || true
+    fi
+    die "Router read/write port did not become ready"
+fi
 port_open "$RO_PORT" || die "Router read-only port did not become ready"
 port_open "$X_RW_PORT" || die "Router X read/write port did not become ready"
 port_open "$X_RO_PORT" || die "Router X read-only port did not become ready"
