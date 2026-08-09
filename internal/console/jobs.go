@@ -86,6 +86,19 @@ type instanceActionPayload struct {
 	Confirm    bool   `json:"confirm"`
 }
 
+type FailedDeploymentCleanupInput struct {
+	DryRun       bool   `json:"dry_run,omitempty"`
+	PreviewJobID string `json:"preview_job_id,omitempty"`
+	Confirmation string `json:"confirmation,omitempty"`
+}
+
+type failedDeploymentCleanupPayload struct {
+	SourceJobID string            `json:"source_job_id"`
+	Deployment  DeploymentRequest `json:"deployment"`
+	DryRun      bool              `json:"dry_run"`
+	Confirm     bool              `json:"confirm"`
+}
+
 type deploymentTarget struct {
 	node       DeploymentNode
 	host       Host
@@ -247,6 +260,145 @@ func (m *JobManager) RetryDeployment(ctx context.Context, user *User, remoteAddr
 	m.Store.Audit(ctx, user, remoteAddr, "deployment_retry", "job", jobID, fmt.Sprintf(`{"previous_job_id":%q}`, previousJobID))
 	go m.runDeployment(jobID, deployment)
 	return jobID, nil
+}
+
+func cleanupConfirmation(jobID string) string {
+	prefix := jobID
+	if len(prefix) > 8 {
+		prefix = prefix[:8]
+	}
+	return "CLEANUP " + prefix
+}
+
+// CreateFailedDeploymentCleanup creates a separately audited, two-phase cleanup
+// task for deployment residue that was never registered as a managed instance.
+func (m *JobManager) CreateFailedDeploymentCleanup(ctx context.Context, user *User, remoteAddr, sourceJobID string, input FailedDeploymentCleanupInput) (string, string, error) {
+	var kind, state, payloadJSON string
+	if err := m.Store.DB.QueryRowContext(ctx, `SELECT kind,state,payload_json FROM jobs WHERE id=?`, sourceJobID).Scan(&kind, &state, &payloadJSON); err != nil {
+		return "", "", errors.New("找不到失败的部署任务")
+	}
+	if kind != "deployment" || state != "failed" {
+		return "", "", errors.New("只有 FAILED 状态的部署任务可以清理远端残留")
+	}
+	var deployment DeploymentRequest
+	if err := json.Unmarshal([]byte(payloadJSON), &deployment); err != nil || len(deployment.Nodes) == 0 {
+		return "", "", errors.New("原部署规格已损坏")
+	}
+	for _, node := range deployment.Nodes {
+		var instances int
+		if err := m.Store.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM instances WHERE host_id=? AND port=?`, node.HostID, deployment.Port).Scan(&instances); err != nil {
+			return "", "", err
+		}
+		if instances > 0 {
+			return "", "", fmt.Errorf("主机 %d 的端口 %d 已登记为受管实例，请从 MySQL 实例页卸载", node.HostID, deployment.Port)
+		}
+	}
+
+	expected := cleanupConfirmation(sourceJobID)
+	confirm := false
+	confirmationHash := ""
+	var previewExpires any
+	if input.DryRun {
+		confirmationHash = hex.EncodeToString(tokenHash(expected))
+		previewExpires = time.Now().UTC().Add(15 * time.Minute).Format(time.RFC3339Nano)
+	} else {
+		if input.PreviewJobID == "" || input.Confirmation == "" {
+			return "", "", errors.New("清理失败安装必须先预览并输入指定确认文本")
+		}
+		var previewState, hash, expires, previewJSON string
+		if err := m.Store.DB.QueryRowContext(ctx, `SELECT state,confirmation_hash,preview_expires_at,payload_json FROM jobs WHERE id=? AND kind='deployment_cleanup'`, input.PreviewJobID).
+			Scan(&previewState, &hash, &expires, &previewJSON); err != nil {
+			return "", "", errors.New("找不到对应的清理预览任务")
+		}
+		var preview failedDeploymentCleanupPayload
+		_ = json.Unmarshal([]byte(previewJSON), &preview)
+		expiresAt, _ := time.Parse(time.RFC3339Nano, expires)
+		if previewState != "complete" || preview.SourceJobID != sourceJobID || !preview.DryRun || time.Now().UTC().After(expiresAt) {
+			return "", "", errors.New("清理预览无效或已超过 15 分钟")
+		}
+		if hex.EncodeToString(tokenHash(input.Confirmation)) != hash {
+			return "", "", errors.New("确认文本不匹配")
+		}
+		confirm = true
+	}
+
+	payload := failedDeploymentCleanupPayload{SourceJobID: sourceJobID, Deployment: deployment, DryRun: input.DryRun, Confirm: confirm}
+	cleanupJSON, _ := json.Marshal(payload)
+	jobID := uuid.NewString()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	tx, err := m.Store.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return "", "", err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO jobs(id,kind,state,payload_json,created_by,created_at,confirmation_hash,preview_expires_at) VALUES(?,'deployment_cleanup','queued',?,?,?,?,?)`,
+		jobID, string(cleanupJSON), user.ID, now, confirmationHash, previewExpires); err != nil {
+		return "", "", err
+	}
+	for index, node := range deployment.Nodes {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO job_hosts(job_id,host_id,step_order) VALUES(?,?,?)`, jobID, node.HostID, index); err != nil {
+			return "", "", err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO host_locks(host_id,job_id,acquired_at) VALUES(?,?,?)`, node.HostID, jobID, now); err != nil {
+			return "", "", fmt.Errorf("主机 %d 已有任务正在执行", node.HostID)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return "", "", err
+	}
+	m.Store.Audit(ctx, user, remoteAddr, "deployment_cleanup", "job", jobID, fmt.Sprintf(`{"source_job_id":%q,"dry_run":%t}`, sourceJobID, input.DryRun))
+	go m.runFailedDeploymentCleanup(jobID, payload)
+	return jobID, expected, nil
+}
+
+func (m *JobManager) runFailedDeploymentCleanup(jobID string, payload failedDeploymentCleanupPayload) {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Hour)
+	defer cancel()
+	defer m.releaseLocks(jobID)
+	if err := m.transitionJob(jobID, "running"); err != nil {
+		m.fail(jobID, err)
+		return
+	}
+	_, _ = m.Store.DB.Exec(`UPDATE jobs SET started_at=? WHERE id=?`, time.Now().UTC().Format(time.RFC3339Nano), jobID)
+	failures := []string{}
+	for _, node := range payload.Deployment.Nodes {
+		_, _ = m.Store.DB.Exec(`UPDATE job_hosts SET state='running' WHERE job_id=? AND host_id=?`, jobID, node.HostID)
+		host, key, err := m.SSH.LoadHost(ctx, node.HostID)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("主机 %d: %v", node.HostID, err))
+			_, _ = m.Store.DB.Exec(`UPDATE job_hosts SET state='failed' WHERE job_id=? AND host_id=?`, jobID, node.HostID)
+			continue
+		}
+		rootPassword, err := m.readSecret(ctx, node.RootSecret)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: 读取已保存凭据失败", host.Name))
+			_, _ = m.Store.DB.Exec(`UPDATE job_hosts SET state='failed' WHERE job_id=? AND host_id=?`, jobID, node.HostID)
+			continue
+		}
+		req := executor.Request{
+			Protocol: executor.ProtocolVersion, RequestID: jobID, Action: "cleanup_failed",
+			Version: payload.Deployment.Version, Port: payload.Deployment.Port,
+			DryRun: payload.DryRun, Confirm: payload.Confirm,
+			Secrets: executor.Secrets{RootPassword: rootPassword},
+		}
+		m.log(jobID, "warning", "cleanup", fmt.Sprintf("%s %s:%d 的失败安装残留和无人使用的软件目录", map[bool]string{true: "预览", false: "清理"}[payload.DryRun], host.Name, payload.Deployment.Port))
+		err = m.SSH.RunExecutor(ctx, host, key, req, func(event executor.Event) {
+			if event.Message != "" {
+				m.log(jobID, event.Level, event.Phase, host.Name+": "+event.Message)
+			}
+		})
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", host.Name, err))
+			_, _ = m.Store.DB.Exec(`UPDATE job_hosts SET state='failed' WHERE job_id=? AND host_id=?`, jobID, node.HostID)
+			continue
+		}
+		_, _ = m.Store.DB.Exec(`UPDATE job_hosts SET state='complete' WHERE job_id=? AND host_id=?`, jobID, node.HostID)
+	}
+	if len(failures) > 0 {
+		m.fail(jobID, errors.New("部分主机清理失败: "+strings.Join(failures, "; ")))
+		return
+	}
+	m.complete(jobID, fmt.Sprintf(`{"source_job_id":%q,"dry_run":%t}`, payload.SourceJobID, payload.DryRun))
 }
 
 func (m *JobManager) VerifyInterruptedDeployment(ctx context.Context, user *User, remoteAddr, jobID string) error {

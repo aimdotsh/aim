@@ -110,6 +110,7 @@ func (s *Server) routes() http.Handler {
 	api.Handle("DELETE /api/v1/jobs/{id}", RequireRole("admin")(http.HandlerFunc(s.deleteJob)))
 	api.Handle("POST /api/v1/jobs/{id}/retry", RequireRole("admin", "operator")(http.HandlerFunc(s.retryJob)))
 	api.Handle("POST /api/v1/jobs/{id}/verify", RequireRole("admin", "operator")(http.HandlerFunc(s.verifyJob)))
+	api.Handle("POST /api/v1/jobs/{id}/cleanup", RequireRole("admin")(http.HandlerFunc(s.cleanupFailedDeployment)))
 	api.HandleFunc("GET /api/v1/instances", s.listInstances)
 	api.Handle("POST /api/v1/instances/{id}/actions", RequireRole("admin", "operator")(http.HandlerFunc(s.instanceAction)))
 	api.HandleFunc("GET /api/v1/clusters", s.listClusters)
@@ -369,17 +370,13 @@ func (s *Server) deleteHost(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if status != "pending" && status != "confirmed" && status != "error" {
-		writeError(w, http.StatusConflict, "仅允许删除尚未上线的 PENDING、CONFIRMED 或 ERROR 主机")
-		return
-	}
 	for _, dependency := range []struct {
 		query   string
 		message string
 	}{
 		{`SELECT COUNT(*) FROM instances WHERE host_id=?`, "该主机仍有关联的 MySQL 实例，不能删除"},
-		{`SELECT COUNT(*) FROM job_hosts WHERE host_id=?`, "该主机仍被任务历史引用，请先删除对应的失败任务记录"},
-		{`SELECT COUNT(*) FROM host_locks WHERE host_id=?`, "该主机仍有任务锁，不能删除"},
+		{`SELECT COUNT(*) FROM job_hosts jh JOIN jobs j ON j.id=jh.job_id WHERE jh.host_id=? AND j.state NOT IN ('complete','failed')`, "该主机仍有运行中或待核实任务，不能删除"},
+		{`SELECT COUNT(*) FROM host_locks hl JOIN jobs j ON j.id=hl.job_id WHERE hl.host_id=? AND j.state NOT IN ('complete','failed')`, "该主机仍有任务锁，不能删除"},
 	} {
 		var count int
 		if err := tx.QueryRowContext(r.Context(), dependency.query, id).Scan(&count); err != nil {
@@ -391,6 +388,19 @@ func (s *Server) deleteHost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM host_locks WHERE host_id=? AND job_id IN (SELECT id FROM jobs WHERE state IN ('complete','failed'))`, id); err != nil {
+		writeError(w, http.StatusInternalServerError, "清理已结束任务锁失败")
+		return
+	}
+	// Terminal task logs and immutable payloads retain the deployment history.
+	// Detach only their host relation so a host with no managed database can be
+	// removed even when it was previously used by a failed deployment.
+	result, err := tx.ExecContext(r.Context(), `DELETE FROM job_hosts WHERE host_id=? AND job_id IN (SELECT id FROM jobs WHERE state IN ('complete','failed'))`, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "解除历史任务主机关联失败")
+		return
+	}
+	detached, _ := result.RowsAffected()
 	if _, err := tx.ExecContext(r.Context(), `DELETE FROM hosts WHERE id=?`, id); err != nil {
 		writeError(w, http.StatusConflict, "删除主机失败，主机仍可能被其他数据引用")
 		return
@@ -399,7 +409,7 @@ func (s *Server) deleteHost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "提交主机删除失败")
 		return
 	}
-	s.Store.Audit(r.Context(), UserFromContext(r.Context()), remoteIP(r), "host_delete", "host", strconv.FormatInt(id, 10), fmt.Sprintf(`{"name":%q,"previous_status":%q,"remote_action":false}`, name, status))
+	s.Store.Audit(r.Context(), UserFromContext(r.Context()), remoteIP(r), "host_delete", "host", strconv.FormatInt(id, 10), fmt.Sprintf(`{"name":%q,"previous_status":%q,"detached_terminal_job_links":%d,"remote_action":false}`, name, status, detached))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -666,6 +676,19 @@ func (s *Server) verifyJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "verified", "job_id": r.PathValue("id")})
+}
+
+func (s *Server) cleanupFailedDeployment(w http.ResponseWriter, r *http.Request) {
+	var input FailedDeploymentCleanupInput
+	if decodeJSON(w, r, &input, 16<<10) != nil {
+		return
+	}
+	jobID, confirmation, err := s.Jobs.CreateFailedDeploymentCleanup(r.Context(), UserFromContext(r.Context()), remoteIP(r), r.PathValue("id"), input)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"job_id": jobID, "confirmation": confirmation})
 }
 
 func (s *Server) jobEvents(w http.ResponseWriter, r *http.Request) {

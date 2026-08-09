@@ -237,6 +237,11 @@ td small { margin-top: 4px; color: #8894a4; }
 .terminal-head { min-height: 55px; display: flex; align-items: center; gap: 15px; padding: 0 18px; border-bottom: 1px solid #26374b; color: #9cacc0; background: #172538; }
 .terminal-head > div { display: flex; gap: 6px; }.terminal-head > div span { width: 10px; height: 10px; border-radius: 50%; background: #f06b6b; }.terminal-head > div span:nth-child(2) { background: #e9b95d; }.terminal-head > div span:nth-child(3) { background: #55bd83; }
 .terminal-head p { min-width: 0; flex: 1; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: monospace; font-size: 11px; }
+.cleanup-confirm { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 14px 18px; color: #ffd6da; background: #3b2028; border-bottom: 1px solid #6f3540; }
+.cleanup-confirm > svg { width: 22px; color: #ff8793; }
+.cleanup-confirm p { margin: 5px 0 10px; font-size: 12px; line-height: 1.5; color: #eab8bd; }
+.cleanup-confirm code { color: #fff; }
+.cleanup-confirm input { width: min(320px, 100%); margin-right: 8px; border-color: #a75661; color: #fff; background: #24151a; }
 .terminal-body { height: 704px; overflow: auto; padding: 18px; color: #b5c1d0; font: 11px/1.65 "SFMono-Regular", Consolas, monospace; }
 .terminal-body p { display: grid; grid-template-columns: 72px 90px 1fr; gap: 7px; margin: 0; padding: 3px 0; }
 .terminal-body time { color: #586b81; }.terminal-body b { color: #56cdbc; font-weight: 600; }.terminal-body .log-error span { color: #f08c98; }.terminal-body .log-warning span { color: #e7bd77; }

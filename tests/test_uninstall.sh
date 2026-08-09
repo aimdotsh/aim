@@ -12,6 +12,7 @@ REINITIALIZE=1
 ASSUME_YES=1
 reset_cli_action_flags
 [[ "$UNINSTALL" == 0 && "$PORT_EXPLICIT" == 0 && "$REINITIALIZE" == 0 && "$ASSUME_YES" == 0 ]]
+[[ "$CLEANUP_FAILED" == 0 ]]
 
 if (PORT_EXPLICIT=0; VERSION="8.0.46"; validate_uninstall_inputs) >/dev/null 2>&1; then
     printf 'uninstall accepted an implicit default port\n' >&2

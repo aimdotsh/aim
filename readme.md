@@ -46,7 +46,7 @@ Web 控制台是可选功能；只使用命令行时仍然只需下载一个 `ai
 - `router.sh`：MGR 完成后的 InnoDB Cluster 接管和 MySQL Router 部署。导出的 MGR+Router 脚本提供独立的 `install`、`router` 两个阶段。
 - `aim-executor` 与 Web 控制台：在线备份、Cron 调度、备份保留、懒猫网盘归档、监控历史、SSH 指纹、权限和审计。这些能力不会被导出为一次性脚本。
 
-目标机需先安装 Host Kit 2.4.10。单节点示例：
+目标机需先安装 Host Kit 2.4.11。单节点示例：
 
 ```bash
 chmod 700 aim-production-mysql.sh
@@ -107,6 +107,13 @@ chmod +x aim.sh
 ```bash
 sudo ./aim.sh --uninstall -v 8.0.46 -p 8046 --dry-run
 sudo ./aim.sh --uninstall -v 8.0.46 -p 8046 --yes
+```
+
+部署任务失败且尚未登记为受管实例时，可以在任务中心先预览、再清理失败安装。等价的目标机命令如下；它会删除指定端口的 AIM 数据、日志和服务，并且仅在没有其他 AIM 实例引用该版本时删除 `/opt/mysql/<version>` 软件目录：
+
+```bash
+sudo ./aim.sh --cleanup-failed -v 8.0.46 -p 8046 --dry-run
+sudo AIM_ROOT_PASSWORD='your-password' ./aim.sh --cleanup-failed -v 8.0.46 -p 8046 --yes
 ```
 
 配置文件不是必需的。如需固定目录、角色等参数，下载样例并重命名为与脚本同目录的 `aim.conf`，脚本会自动读取：

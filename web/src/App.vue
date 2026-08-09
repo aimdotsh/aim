@@ -54,6 +54,8 @@ const backupForm = reactive({
 })
 const pendingDestructive = ref(null)
 const confirmation = ref('')
+const pendingCleanup = ref(null)
+const cleanupConfirmationInput = ref('')
 
 const navigation = computed(() => [
   { id: 'dashboard', label: '运行总览', icon: LayoutDashboard },
@@ -271,9 +273,9 @@ async function probeHost(host) {
 
 async function deleteHost(host) {
   const confirmed = window.confirm(
-    `确认删除尚未上线的主机“${host.name}”？\n\n` +
+    `确认从控制台删除主机“${host.name}”？\n\n` +
     '这只会删除控制台中的主机记录和加密 SSH 私钥，不会连接远端执行卸载或清理。\n' +
-    '如果主机仍有关联实例或任务历史，系统会拒绝删除。'
+    '系统仅允许删除没有受管 MySQL 实例、且没有运行中或待核实任务的主机。历史任务日志仍会保留。'
   )
   if (!confirmed) return
   await run(async () => {
@@ -434,6 +436,34 @@ async function retryJob(job) {
     jobs.value = await api('/jobs')
     flash(`已从未完成节点创建重试任务 ${result.job_id.slice(0, 8)}`)
     openJob(result.job_id)
+  }).catch(() => {})
+}
+
+async function previewFailedCleanup(job) {
+  await run(async () => {
+    const result = await api(`/jobs/${job.id}/cleanup`, { method: 'POST', body: JSON.stringify({ dry_run: true }) })
+    pendingCleanup.value = { source_job_id: job.id, preview_job_id: result.job_id, confirmation: result.confirmation }
+    cleanupConfirmationInput.value = ''
+    jobs.value = await api('/jobs')
+    await openJob(result.job_id)
+    flash('清理预览已创建；预览成功后输入确认文本执行')
+  }).catch(() => {})
+}
+
+async function confirmFailedCleanup() {
+  const pending = pendingCleanup.value
+  if (!pending) return
+  await run(async () => {
+    const preview = await api(`/jobs/${pending.preview_job_id}`)
+    if (preview.state !== 'complete') throw new Error('清理预览尚未成功完成，请先查看预览日志')
+    const result = await api(`/jobs/${pending.source_job_id}/cleanup`, {
+      method: 'POST',
+      body: JSON.stringify({ preview_job_id: pending.preview_job_id, confirmation: cleanupConfirmationInput.value })
+    })
+    pendingCleanup.value = null
+    cleanupConfirmationInput.value = ''
+    jobs.value = await api('/jobs')
+    await openJob(result.job_id)
   }).catch(() => {})
 }
 
@@ -651,12 +681,12 @@ onMounted(restoreSession)
       </div>
 
       <div v-else-if="page === 'hosts'" class="page-stack">
-        <section v-if="isAdmin" class="panel"><div class="panel-head"><div><p class="eyebrow">HOST ONBOARDING</p><h3>添加受管主机</h3></div><a class="button secondary" href="/downloads/aim-host-kit-2.4.10.tar.gz" download><Archive />下载 Host Kit 2.4.10</a></div>
+        <section v-if="isAdmin" class="panel"><div class="panel-head"><div><p class="eyebrow">HOST ONBOARDING</p><h3>添加受管主机</h3></div><a class="button secondary" href="/downloads/aim-host-kit-2.4.11.tar.gz" download><Archive />下载 Host Kit 2.4.11</a></div>
           <div class="host-kit-guide">
-            <div class="host-kit-intro"><span class="guide-icon"><TerminalSquare /></span><div><p class="eyebrow">HOST KIT 2.4.10</p><h3>先在管理电脑初始化目标主机</h3><p>支持 macOS、Linux 或 WSL；目标机支持 RHEL 系（含 OpenCloudOS）、Debian/Ubuntu 与 SUSE。工具会生成 AIM 专用密钥，识别目标机架构，复制 MySQL/Router 受限执行器，并提供失败部署的安全续跑能力。已安装旧版的主机也应重新执行一次，幂等升级不会删除 MySQL 数据。</p></div><span class="safety-badge"><ShieldCheck />不会复制私钥到目标机</span></div>
+            <div class="host-kit-intro"><span class="guide-icon"><TerminalSquare /></span><div><p class="eyebrow">HOST KIT 2.4.11</p><h3>先在管理电脑初始化目标主机</h3><p>支持 macOS、Linux 或 WSL；目标机支持 RHEL 系（含 OpenCloudOS）、Debian/Ubuntu 与 SUSE。工具会生成 AIM 专用密钥，识别目标机架构，复制 MySQL/Router 受限执行器，并提供失败部署的安全续跑与受限清理能力。已安装旧版的主机也应重新执行一次，幂等升级不会删除 MySQL 数据。</p></div><span class="safety-badge"><ShieldCheck />不会复制私钥到目标机</span></div>
             <div class="host-kit-steps">
-              <article><span class="step-number">01</span><div><h4>下载并解压</h4><p>先点击下面的按钮下载安装包。下载完成后，在能够 SSH 登录目标服务器的管理电脑上打开终端并执行：</p><a class="button primary guide-download" href="/downloads/aim-host-kit-2.4.10.tar.gz" download><Archive />下载 Host Kit 2.4.10</a><p class="download-note">文件通常保存在系统的“下载”目录，文件名为 <code>aim-host-kit-2.4.10.tar.gz</code>。</p><pre><code>tar -xzf aim-host-kit-2.4.10.tar.gz
-cd aim-host-kit-2.4.10</code></pre></div></article>
+              <article><span class="step-number">01</span><div><h4>下载并解压</h4><p>先点击下面的按钮下载安装包。下载完成后，在能够 SSH 登录目标服务器的管理电脑上打开终端并执行：</p><a class="button primary guide-download" href="/downloads/aim-host-kit-2.4.11.tar.gz" download><Archive />下载 Host Kit 2.4.11</a><p class="download-note">文件通常保存在系统的“下载”目录，文件名为 <code>aim-host-kit-2.4.11.tar.gz</code>。</p><pre><code>tar -xzf aim-host-kit-2.4.11.tar.gz
+cd aim-host-kit-2.4.11</code></pre></div></article>
               <article><span class="step-number">02</span><div><h4>一键初始化目标机</h4><p>把示例地址替换为实际目标机。首次账号可以是 root，或具备 sudo 权限的运维账号：</p><pre><code>./aim-copy-id --install root@192.168.1.100</code></pre><p class="command-note">非 22 端口：<code>./aim-copy-id --install --port 2222 root@192.168.1.100</code></p></div></article>
               <article><span class="step-number">03</span><div><h4>导入专用私钥</h4><p>命令结束会打印私钥路径，默认是：</p><pre><code>~/.ssh/aim/aim_console_ed25519</code></pre><p class="command-note danger-text">不要选择 <code>aim_console_ed25519.pub</code>；带 <code>.pub</code> 的是公钥。</p></div></article>
               <article><span class="step-number">04</span><div><h4>保存并确认指纹</h4><p>下面填写目标机地址和端口，SSH 用户固定填写 <code>aimops</code>，导入上一步的私钥。保存后先核对 SSH SHA-256 指纹，再点击“重新探测”。</p></div></article>
@@ -669,7 +699,7 @@ cd aim-host-kit-2.4.10</code></pre></div></article>
           <form class="form-grid host-form" @submit.prevent="updateHost"><label>主机名称<input v-model.trim="editHostForm.name" required></label><label>IP 或域名<input v-model.trim="editHostForm.address" required></label><label>SSH 端口<input v-model.number="editHostForm.ssh_port" type="number" min="1" max="65535" required></label><label>SSH 用户<input v-model.trim="editHostForm.ssh_user" required></label><label class="button secondary span-2">重新导入专用私钥（可选）<input type="file" hidden @change="importEditPrivateKey"></label><label class="span-2">新 SSH 私钥 <small v-if="editPrivateKeyFilename">已导入：{{ editPrivateKeyFilename }}</small><textarea v-model="editHostForm.private_key" rows="4" placeholder="留空则继续使用原私钥；不要填写 .pub 公钥"></textarea><small>修改地址、端口、SSH 用户或私钥后，旧主机指纹会失效，必须重新确认。</small></label><div class="form-actions span-2"><button type="button" class="button ghost" @click="cancelEditHost">取消</button><button class="button primary" :disabled="busy"><Pencil />保存修改</button></div></form>
         </section>
         <section class="panel"><div class="panel-head"><div><p class="eyebrow">INVENTORY</p><h3>主机资源</h3></div></div>
-          <div class="card-grid"><article v-for="host in hosts" :key="host.id" class="host-card"><div class="host-card-head"><span class="server-glyph"><Server /></span><div><h4>{{ host.name }}</h4><span class="mono">{{ host.address }}:{{ host.ssh_port }}</span></div><span class="status" :class="statusClass(host.status)">{{ host.status }}</span></div><dl><div><dt>系统</dt><dd>{{ host.facts?.os_name || '等待探测' }}</dd></div><div><dt>架构 / glibc</dt><dd>{{ host.facts?.architecture || '—' }} / {{ host.facts?.glibc || '—' }}</dd></div><div><dt>IPv4</dt><dd>{{ host.facts?.ipv4?.join(', ') || '—' }}</dd></div><div><dt>资源</dt><dd>{{ host.facts?.cpus || '—' }} CPU · {{ host.facts?.memory_mb || '—' }} MiB</dd></div></dl><div class="card-actions"><button v-if="isAdmin" class="button secondary" @click="startEditHost(host)"><Pencil />修改</button><button v-if="isAdmin && !host.host_key_fingerprint" class="button secondary" @click="trustFingerprint(host)"><KeyRound />确认指纹</button><button v-if="canOperate && host.host_key_fingerprint" class="button secondary" @click="probeHost(host)"><Activity />重新探测</button><button v-if="isAdmin && ['pending','confirmed','error'].includes(host.status)" class="button danger" @click="deleteHost(host)"><Trash2 />删除主机</button></div><p v-if="host.last_error" class="inline-error">{{ host.last_error }}</p></article><div v-if="!hosts.length" class="empty-card">还没有受管主机，请先添加专用 aimops SSH 账号。</div></div>
+          <div class="card-grid"><article v-for="host in hosts" :key="host.id" class="host-card"><div class="host-card-head"><span class="server-glyph"><Server /></span><div><h4>{{ host.name }}</h4><span class="mono">{{ host.address }}:{{ host.ssh_port }}</span></div><span class="status" :class="statusClass(host.status)">{{ host.status }}</span></div><dl><div><dt>系统</dt><dd>{{ host.facts?.os_name || '等待探测' }}</dd></div><div><dt>架构 / glibc</dt><dd>{{ host.facts?.architecture || '—' }} / {{ host.facts?.glibc || '—' }}</dd></div><div><dt>IPv4</dt><dd>{{ host.facts?.ipv4?.join(', ') || '—' }}</dd></div><div><dt>资源</dt><dd>{{ host.facts?.cpus || '—' }} CPU · {{ host.facts?.memory_mb || '—' }} MiB</dd></div></dl><div class="card-actions"><button v-if="isAdmin" class="button secondary" @click="startEditHost(host)"><Pencil />修改</button><button v-if="isAdmin && !host.host_key_fingerprint" class="button secondary" @click="trustFingerprint(host)"><KeyRound />确认指纹</button><button v-if="canOperate && host.host_key_fingerprint" class="button secondary" @click="probeHost(host)"><Activity />重新探测</button><button v-if="isAdmin" class="button danger" @click="deleteHost(host)"><Trash2 />删除空主机</button></div><p v-if="host.last_error" class="inline-error">{{ host.last_error }}</p></article><div v-if="!hosts.length" class="empty-card">还没有受管主机，请先添加专用 aimops SSH 账号。</div></div>
         </section>
       </div>
 
@@ -712,7 +742,7 @@ cd aim-host-kit-2.4.10</code></pre></div></article>
 
       <div v-else-if="page === 'clusters'" class="page-stack"><section class="panel"><div class="panel-head"><div><p class="eyebrow">TOPOLOGY</p><h3>复制、MGR 与 Router</h3></div></div><div class="card-grid"><article v-for="cluster in clusters" :key="cluster.id" class="cluster-card"><div class="cluster-icon"><Network /></div><div><span class="status" :class="statusClass(cluster.state)">{{ cluster.state }}</span><h3>{{ cluster.name }}</h3><p>{{ cluster.type.toUpperCase() }} · {{ cluster.group_name || 'GTID Replication' }}</p><template v-if="cluster.router_enabled"><p><strong>Router · {{ cluster.router_cluster_name }}</strong></p><small class="mono">Classic RW :{{ cluster.router_rw_port }} · {{ cluster.router_endpoints.join(' / ') }}</small></template><small>{{ formatTime(cluster.created_at) }}</small></div></article><div v-if="!clusters.length" class="empty-card">暂无集群拓扑</div></div></section></div>
 
-      <div v-else-if="page === 'jobs'" class="split-layout"><section class="panel job-list"><div class="panel-head"><div><p class="eyebrow">TASK HISTORY</p><h3>任务记录</h3></div></div><button v-for="job in jobs" :key="job.id" :class="{ selected: selectedJob?.id === job.id }" @click="openJob(job.id)"><span class="job-state" :class="statusClass(job.state)"></span><div><strong>{{ job.kind }}</strong><span class="mono">{{ job.id.slice(0, 12) }}</span></div><time>{{ formatTime(job.created_at) }}</time></button><div v-if="!jobs.length" class="empty">暂无任务</div></section><section class="terminal-panel"><div class="terminal-head"><div><span></span><span></span><span></span></div><p v-if="selectedJob"><strong>{{ selectedJob.kind }}</strong> / {{ selectedJob.id }}</p><button v-if="canOperate && selectedJob?.kind === 'deployment' && selectedJob?.state === 'needs_verification'" class="button secondary compact-button" @click="verifyJob(selectedJob)"><Activity />核实远端状态</button><button v-if="canOperate && selectedJob?.kind === 'deployment' && selectedJob?.state === 'failed'" class="button secondary compact-button" @click="retryJob(selectedJob)"><RefreshCw />从失败节点重试</button><button v-if="isAdmin && selectedJob?.state === 'failed'" class="button danger compact-button" @click="deleteJob(selectedJob)"><Trash2 />删除失败记录</button><span v-if="selectedJob" class="status" :class="statusClass(selectedJob.state)">{{ selectedJob.state }}</span></div><div class="terminal-body" aria-live="polite"><template v-if="selectedJob"><p v-for="log in jobLogs" :key="log.id" :class="`log-${log.level}`"><time>{{ new Date(log.created_at).toLocaleTimeString() }}</time><b>[{{ log.phase }}]</b><span>{{ log.message }}</span></p><p v-if="!jobLogs.length" class="terminal-empty">等待任务日志…</p></template><div v-else class="terminal-placeholder"><TerminalSquare /><p>选择左侧任务查看实时执行日志</p></div></div></section></div>
+      <div v-else-if="page === 'jobs'" class="split-layout"><section class="panel job-list"><div class="panel-head"><div><p class="eyebrow">TASK HISTORY</p><h3>任务记录</h3></div></div><button v-for="job in jobs" :key="job.id" :class="{ selected: selectedJob?.id === job.id }" @click="openJob(job.id)"><span class="job-state" :class="statusClass(job.state)"></span><div><strong>{{ job.kind }}</strong><span class="mono">{{ job.id.slice(0, 12) }}</span></div><time>{{ formatTime(job.created_at) }}</time></button><div v-if="!jobs.length" class="empty">暂无任务</div></section><section class="terminal-panel"><div class="terminal-head"><div><span></span><span></span><span></span></div><p v-if="selectedJob"><strong>{{ selectedJob.kind }}</strong> / {{ selectedJob.id }}</p><button v-if="canOperate && selectedJob?.kind === 'deployment' && selectedJob?.state === 'needs_verification'" class="button secondary compact-button" @click="verifyJob(selectedJob)"><Activity />核实远端状态</button><button v-if="canOperate && selectedJob?.kind === 'deployment' && selectedJob?.state === 'failed'" class="button secondary compact-button" @click="retryJob(selectedJob)"><RefreshCw />从失败节点重试</button><button v-if="isAdmin && selectedJob?.kind === 'deployment' && selectedJob?.state === 'failed'" class="button danger compact-button" @click="previewFailedCleanup(selectedJob)"><TriangleAlert />清理失败安装</button><button v-if="isAdmin && selectedJob?.state === 'failed'" class="button danger compact-button" @click="deleteJob(selectedJob)"><Trash2 />删除失败记录</button><span v-if="selectedJob" class="status" :class="statusClass(selectedJob.state)">{{ selectedJob.state }}</span></div><section v-if="pendingCleanup" class="cleanup-confirm"><TriangleAlert /><div><strong>永久清理失败安装</strong><p>预览任务 {{ pendingCleanup.preview_job_id.slice(0, 12) }} 成功后，输入 <code>{{ pendingCleanup.confirmation }}</code>。将清理全部部署节点上该端口的数据库残留，并删除未被其他 AIM 实例使用的 MySQL 二进制目录。</p><input v-model.trim="cleanupConfirmationInput" :placeholder="pendingCleanup.confirmation"><button class="button danger compact-button" @click="confirmFailedCleanup">确认清理</button><button class="button ghost compact-button" @click="pendingCleanup=null">取消</button></div></section><div class="terminal-body" aria-live="polite"><template v-if="selectedJob"><p v-for="log in jobLogs" :key="log.id" :class="`log-${log.level}`"><time>{{ new Date(log.created_at).toLocaleTimeString() }}</time><b>[{{ log.phase }}]</b><span>{{ log.message }}</span></p><p v-if="!jobLogs.length" class="terminal-empty">等待任务日志…</p></template><div v-else class="terminal-placeholder"><TerminalSquare /><p>选择左侧任务查看实时执行日志</p></div></div></section></div>
 
       <div v-else-if="page === 'secrets'" class="page-stack"><section class="panel"><div class="panel-head"><div><p class="eyebrow">ENCRYPTED VAULT</p><h3>密码保险箱</h3></div><span class="safety-badge"><ShieldCheck />AES-256-GCM</span></div><div class="table-wrap"><table><thead><tr><th>名称</th><th>类型</th><th>创建时间</th><th></th></tr></thead><tbody><tr v-for="secret in secrets" :key="secret.id"><td><strong>{{ secret.name }}</strong></td><td>{{ secret.kind }}</td><td>{{ formatTime(secret.created_at) }}</td><td><button class="button secondary compact-button" @click="revealSecret(secret)"><Eye />查看并审计</button></td></tr><tr v-if="!secrets.length"><td colspan="4" class="empty">暂无加密密码</td></tr></tbody></table></div></section><section v-if="revealedSecret" class="secret-reveal"><KeyRound /><div><span>{{ revealedSecret.name }}</span><code>{{ revealedSecret.value }}</code><small>本次查看操作已写入审计日志。</small></div><button @click="revealedSecret=null">×</button></section></div>
 

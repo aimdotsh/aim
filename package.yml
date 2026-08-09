@@ -1,7 +1,7 @@
 package: f00700f.aim
-version: 1.0.28
+version: 1.0.29
 name: aim.sh MySQL 控制台
-description: 面向懒猫微服的 MySQL、主从、MGR 与 Router 部署、低内存参数优化、断点恢复、在线备份、健康监控和生命周期管理控制台
+description: 面向懒猫微服的 MySQL、主从、MGR 与 Router 部署、失败安装清理、断点恢复、在线备份、健康监控和生命周期管理控制台
 author: F007
 license: Apache-2.0
 homepage: https://github.com/aimdotsh/aim
@@ -10,7 +10,7 @@ min_os_version: 1.5.2
 locales:
   zh:
     name: aim.sh MySQL 控制台
-    description: 支持懒猫 OIDC、MySQL/MGR/Router 部署、可移植执行脚本、低内存优化、安全续跑、在线备份、健康监控与网盘存储的数据库控制台
+    description: 支持懒猫 OIDC、MySQL/MGR/Router 部署、失败安装安全清理、断点续跑、在线备份、健康监控与网盘存储的数据库控制台
   en:
     name: aim.sh MySQL Console
     description: MySQL, MGR and Router deployment with portable scripts, online backup and monitoring using LazyCat OIDC and Drive

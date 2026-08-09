@@ -118,14 +118,20 @@ func TestResumeRequestUsesBoundedRecoveryAction(t *testing.T) {
 
 func TestDestructiveActionRequiresPreviewOrConfirmation(t *testing.T) {
 	cfg := testConfig(t)
-	req := baseRequest()
-	req.Action = "uninstall"
-	if err := ValidateRequest(req, cfg); err == nil {
-		t.Fatal("unconfirmed uninstall was accepted")
-	}
-	req.DryRun = true
-	if err := ValidateRequest(req, cfg); err != nil {
-		t.Fatalf("dry-run uninstall was rejected: %v", err)
+	for _, action := range []string{"uninstall", "cleanup_failed"} {
+		req := baseRequest()
+		req.Action = action
+		if err := ValidateRequest(req, cfg); err == nil {
+			t.Fatalf("unconfirmed %s was accepted", action)
+		}
+		req.DryRun = true
+		if err := ValidateRequest(req, cfg); err != nil {
+			t.Fatalf("dry-run %s was rejected: %v", action, err)
+		}
+		args, _, err := BuildCommand(req, cfg)
+		if err != nil || (action == "cleanup_failed" && !strings.Contains(strings.Join(args, " "), "--cleanup-failed")) {
+			t.Fatalf("%s command was not safely built: args=%v err=%v", action, args, err)
+		}
 	}
 }
 

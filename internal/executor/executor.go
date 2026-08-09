@@ -173,7 +173,7 @@ func ValidateRequest(req Request, cfg Config) error {
 		}
 		return nil
 	}
-	if req.Action != "install" && req.Action != "resume" && req.Action != "reinitialize" && req.Action != "uninstall" &&
+	if req.Action != "install" && req.Action != "resume" && req.Action != "reinitialize" && req.Action != "uninstall" && req.Action != "cleanup_failed" &&
 		req.Action != "start" && req.Action != "stop" && req.Action != "status" {
 		return errors.New("unsupported action")
 	}
@@ -183,7 +183,7 @@ func ValidateRequest(req Request, cfg Config) error {
 	if req.Port < 1 || req.Port > 65535 {
 		return errors.New("invalid MySQL port")
 	}
-	if (req.Action == "reinitialize" || req.Action == "uninstall") && !req.DryRun && !req.Confirm {
+	if (req.Action == "reinitialize" || req.Action == "uninstall" || req.Action == "cleanup_failed") && !req.DryRun && !req.Confirm {
 		return errors.New("destructive action requires dry_run or confirm")
 	}
 	if req.Action == "install" || req.Action == "resume" || req.Action == "reinitialize" {
@@ -461,6 +461,8 @@ func BuildCommand(req Request, cfg Config) ([]string, []string, error) {
 		args = append(args, "--resume")
 	case "uninstall":
 		args = append(args, "--uninstall")
+	case "cleanup_failed":
+		args = append(args, "--cleanup-failed")
 	case "reinitialize":
 		args = append(args, "--reinitialize")
 	}

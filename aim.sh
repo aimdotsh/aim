@@ -69,6 +69,7 @@ PID_FILE=""
 SERVICE_NAME=""
 MYSQL=""
 MYSQLADMIN=""
+CLEANUP_FAILED=0
 
 usage() {
     cat <<EOF
@@ -77,6 +78,7 @@ AIM ${AIM_VERSION} - MySQL 5.6/5.7/8.0/8.4 lifecycle manager
 Usage:
   sudo $0 -v VERSION [-p PORT] [options]
   sudo $0 --uninstall -v VERSION -p PORT [--dry-run|--yes]
+  sudo $0 --cleanup-failed -v VERSION -p PORT [--dry-run|--yes]
   sudo $0 --status|--start|--stop -v VERSION -p PORT
   sudo $0 --resume -v VERSION -p PORT [deployment options]
 
@@ -92,6 +94,7 @@ Instance:
       --bind-address ADDRESS  Listen address (default: 0.0.0.0)
       --root-password PASS    Root password (random when omitted)
       --uninstall             Remove one AIM instance; -v and -p are required
+      --cleanup-failed        Remove a failed AIM instance and its unused MySQL binary tree
       --status                Show service and port state for one AIM instance
       --start                 Start one AIM instance
       --stop                  Stop one AIM instance
@@ -135,7 +138,7 @@ Paths and package:
       --skip-deps             Do not install OS packages
       --dry-run               Validate and print actions without changing host
       --reinitialize          Delete and recreate this port's instance data
-      --yes                   Confirm destructive reinitialize/uninstall non-interactively
+      --yes                   Confirm destructive reinitialize/uninstall/cleanup non-interactively
       --machine-readable      Emit a final JSON result for automation
       --no-print-secrets      Never print generated or supplied passwords
   -h, --help                  Show this help
@@ -150,6 +153,7 @@ Examples:
       --mgr-group-name 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' --mgr-allowlist '10.0.0.0/24' \\
       --mgr-bootstrap --mgr-recovery-password 'same-secret-on-all-members'
   sudo $0 --uninstall -v 8.0.46 -p 8046 --dry-run
+  sudo $0 --cleanup-failed -v 8.0.46 -p 8046 --dry-run
 EOF
 }
 
@@ -252,6 +256,7 @@ reset_cli_action_flags() {
     REINITIALIZE=0
     ASSUME_YES=0
     UNINSTALL=0
+    CLEANUP_FAILED=0
     ACTION="install"
     ACTION_COUNT=0
     MACHINE_READABLE=0
@@ -293,6 +298,7 @@ parse_args() {
             --bind-address) need_arg "$@"; BIND_ADDRESS="$2"; shift 2 ;;
             --root-password) need_arg "$@"; ROOT_PASSWORD="$2"; shift 2 ;;
             --uninstall) set_action uninstall; UNINSTALL=1; shift ;;
+            --cleanup-failed) set_action cleanup_failed; CLEANUP_FAILED=1; shift ;;
             --status) set_action status; shift ;;
             --start) set_action start; shift ;;
             --stop) set_action stop; shift ;;
@@ -627,14 +633,15 @@ assert_safe_child_path() {
 }
 
 validate_uninstall_inputs() {
-    local root_path
+    local root_path action_label="--uninstall"
+    (( CLEANUP_FAILED )) && action_label="--cleanup-failed"
     [[ "$VERSION" =~ ^(5\.6|5\.7|8\.0|8\.4)\.[0-9]+$ ]] ||
-        die "--uninstall requires an exact supported version"
-    (( PORT_EXPLICIT )) || die "--uninstall requires an explicit -p/--port"
+        die "$action_label requires an exact supported version"
+    (( PORT_EXPLICIT )) || die "$action_label requires an explicit -p/--port"
     [[ "$PORT" =~ ^[0-9]+$ ]] || die "invalid port: $PORT"
     PORT=$((10#$PORT))
     (( PORT >= 1 && PORT <= 65535 )) || die "invalid port: $PORT"
-    (( ! REINITIALIZE )) || die "--uninstall cannot be combined with --reinitialize"
+    (( ! REINITIALIZE )) || die "$action_label cannot be combined with --reinitialize"
     for root_path in "$BASE_ROOT" "$DATA_ROOT" "$LOG_ROOT" "$TMP_ROOT"; do
         [[ "$root_path" == /* && "$root_path" != / ]] ||
             die "installation roots must be absolute non-root paths: $root_path"
@@ -705,6 +712,102 @@ uninstall_instance() {
         systemctl daemon-reload
     fi
     log "instance removed; shared binaries, media, and aim.conf were retained"
+}
+
+mysql_binary_tree_in_use_elsewhere() {
+    local basedir="$1" excluded_config="$2" config configured_basedir
+    [[ -d "$DATA_ROOT" ]] || return 1
+    while IFS= read -r -d '' config; do
+        [[ "$config" == "$excluded_config" ]] && continue
+        configured_basedir="$(awk -F= '
+            /^[[:space:]]*basedir[[:space:]]*=/ {
+                value=$0; sub(/^[^=]*=[[:space:]]*/, "", value); sub(/[[:space:]]+$/, "", value); print value; exit
+            }
+        ' "$config" 2>/dev/null || true)"
+        [[ "$configured_basedir" != "$basedir" ]] || return 0
+    done < <(find "$DATA_ROOT" -mindepth 2 -maxdepth 2 -type f -name my.cnf -print0 2>/dev/null)
+    return 1
+}
+
+cleanup_failed_install() {
+    validate_uninstall_inputs
+    require_root
+
+    local instance_root="${DATA_ROOT}/${PORT}"
+    local socket="${instance_root}/mysql.sock"
+    local pid_file="${instance_root}/mysql.pid"
+    local logdir="${LOG_ROOT}/${PORT}"
+    local tmpdir="${TMP_ROOT}/${PORT}"
+    local basedir="${BASE_ROOT}/${VERSION}"
+    local service="aim-mysql-${PORT}"
+    local unit="/etc/systemd/system/${service}.service"
+    local start_script="${BASE_ROOT}/start-${PORT}.sh"
+    local stop_script="${BASE_ROOT}/stop-${PORT}.sh"
+    local path pid="" has_artifacts=0 package_in_use=0
+
+    assert_safe_child_path "$instance_root" "$DATA_ROOT"
+    assert_safe_child_path "$logdir" "$LOG_ROOT"
+    assert_safe_child_path "$tmpdir" "$TMP_ROOT"
+    assert_safe_child_path "$basedir" "$BASE_ROOT"
+    assert_safe_child_path "$start_script" "$BASE_ROOT"
+    assert_safe_child_path "$stop_script" "$BASE_ROOT"
+    for path in "$instance_root" "$logdir" "$tmpdir" "$unit" "$start_script" "$stop_script" "$basedir"; do
+        [[ ! -e "$path" && ! -L "$path" ]] || has_artifacts=1
+    done
+
+    if mysql_binary_tree_in_use_elsewhere "$basedir" "${instance_root}/my.cnf"; then
+        package_in_use=1
+    fi
+    warn "FAILED-INSTALL CLEANUP WILL PERMANENTLY DELETE AIM artifacts for port $PORT"
+    printf '[aim] remove instance: %s %s %s %s %s %s\n' \
+        "$instance_root" "$logdir" "$tmpdir" "$unit" "$start_script" "$stop_script"
+    if (( package_in_use )); then
+        log "retain shared MySQL binary tree in use by another AIM instance: $basedir"
+    else
+        printf '[aim] remove unused MySQL binary tree: %s\n' "$basedir"
+    fi
+    if (( ! has_artifacts )); then
+        log "no failed-install artifacts remain for MySQL $VERSION on port $PORT"
+        return
+    fi
+    if (( DRY_RUN )); then
+        log "dry-run: failed-install cleanup preview completed; nothing was stopped or deleted"
+        return
+    fi
+    if (( ! ASSUME_YES )); then
+        [[ -t 0 ]] || die "failed-install cleanup confirmation requires a terminal; review --dry-run, then pass --yes"
+        local answer
+        read -r -p "Type CLEANUP-${PORT} to permanently clean this failed install: " answer
+        [[ "$answer" == "CLEANUP-${PORT}" ]] || die "confirmation did not match; host was not changed"
+    fi
+
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]] &&
+        { [[ -e "$unit" ]] || systemctl list-unit-files "${service}.service" --no-legend 2>/dev/null | grep -q "$service"; }; then
+        systemctl disable --now "$service"
+    fi
+    if [[ -S "$socket" ]] && port_is_listening; then
+        [[ -n "$ROOT_PASSWORD" ]] || die "instance is still running; the saved MySQL root password is required for cleanup"
+        [[ -x "$basedir/bin/mysqladmin" ]] || die "instance is still running but mysqladmin is missing; refusing deletion"
+        MYSQL_PWD="$ROOT_PASSWORD" "$basedir/bin/mysqladmin" \
+            --protocol=socket --socket="$socket" --user=root shutdown
+    fi
+    port_is_listening && die "port $PORT is still listening after shutdown; refusing deletion"
+    if [[ -r "$pid_file" ]]; then
+        read -r pid <"$pid_file" || true
+        if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+            die "mysqld process $pid is still running; refusing deletion"
+        fi
+    fi
+
+    rm -rf -- "$instance_root" "$logdir" "$tmpdir"
+    rm -f -- "$unit" "$start_script" "$stop_script"
+    if (( ! package_in_use )); then
+        rm -rf -- "$basedir"
+    fi
+    if command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]; then
+        systemctl daemon-reload
+    fi
+    log "failed AIM installation cleaned; system dependency packages and shared media were retained"
 }
 
 reinitialize_instance() {
@@ -1609,6 +1712,12 @@ main() {
         uninstall_instance
         derive_instance_paths
         machine_result true uninstall "$([[ "$DRY_RUN" == 1 ]] && printf preview || printf removed)"
+        return
+    fi
+    if (( CLEANUP_FAILED )); then
+        cleanup_failed_install
+        derive_instance_paths
+        machine_result true cleanup_failed "$([[ "$DRY_RUN" == 1 ]] && printf preview || printf removed)"
         return
     fi
     if [[ "$ACTION" =~ ^(status|start|stop)$ ]]; then

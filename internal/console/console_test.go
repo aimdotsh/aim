@@ -286,14 +286,8 @@ func TestFailedJobAndErrorHostDeletion(t *testing.T) {
 
 	response := httptest.NewRecorder()
 	server.deleteHost(response, request(http.MethodDelete, "1"))
-	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "任务历史") {
-		t.Fatalf("host referenced by a job was not protected: %d %s", response.Code, response.Body.String())
-	}
-
-	response = httptest.NewRecorder()
-	server.deleteJob(response, request(http.MethodDelete, jobID))
 	if response.Code != http.StatusNoContent {
-		t.Fatalf("failed job deletion failed: %d %s", response.Code, response.Body.String())
+		t.Fatalf("empty error host with terminal history could not be deleted: %d %s", response.Code, response.Body.String())
 	}
 	for table, query := range map[string]string{
 		"jobs":       `SELECT COUNT(*) FROM jobs WHERE id='failed-job-to-delete'`,
@@ -302,22 +296,20 @@ func TestFailedJobAndErrorHostDeletion(t *testing.T) {
 		"host_locks": `SELECT COUNT(*) FROM host_locks WHERE job_id='failed-job-to-delete'`,
 	} {
 		var count int
-		if err := store.DB.QueryRow(query).Scan(&count); err != nil || count != 0 {
-			t.Fatalf("%s was not cleaned up: count=%d err=%v", table, count, err)
+		expected := 0
+		if table == "jobs" || table == "job_logs" {
+			expected = 1
 		}
-	}
-
-	response = httptest.NewRecorder()
-	server.deleteHost(response, request(http.MethodDelete, "1"))
-	if response.Code != http.StatusNoContent {
-		t.Fatalf("error host deletion failed: %d %s", response.Code, response.Body.String())
+		if err := store.DB.QueryRow(query).Scan(&count); err != nil || count != expected {
+			t.Fatalf("unexpected %s count after host deletion: count=%d expected=%d err=%v", table, count, expected, err)
+		}
 	}
 	var hostCount int
 	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM hosts WHERE id=?`, hostID).Scan(&hostCount); err != nil || hostCount != 0 {
 		t.Fatalf("host was not deleted: count=%d err=%v", hostCount, err)
 	}
 	var auditCount int
-	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action IN ('job_delete','host_delete')`).Scan(&auditCount); err != nil || auditCount != 2 {
+	if err := store.DB.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='host_delete'`).Scan(&auditCount); err != nil || auditCount != 1 {
 		t.Fatalf("deletions were not audited: count=%d err=%v", auditCount, err)
 	}
 }
@@ -404,6 +396,9 @@ func TestDeletionRejectsUnsafeStates(t *testing.T) {
 	}
 	hostID, _ := hostResult.LastInsertId()
 	if _, err := store.DB.Exec(`INSERT INTO jobs(id,kind,state,payload_json,created_by,created_at) VALUES('running-job','deployment','running','{}',1,?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`INSERT INTO job_hosts(job_id,host_id,step_order,state) VALUES('running-job',?,0,'running')`, hostID); err != nil {
 		t.Fatal(err)
 	}
 	server := &Server{Store: store}
