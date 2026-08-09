@@ -95,7 +95,8 @@ md5_file() {
 }
 
 download_verified() {
-    local product="$1" filename="$2" expected="$3" destination="${CACHE_ROOT}/${filename}"
+    local product="$1" filename="$2" expected="$3" destination
+    destination="${CACHE_ROOT}/${filename}"
     if [[ -f "$destination" && "$(md5_file "$destination")" == "$expected" ]]; then
         printf '%s' "$destination"
         return

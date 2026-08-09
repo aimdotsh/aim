@@ -35,7 +35,7 @@ lzc-cli project release .
 
 2.4.5 提供类似 `ssh-copy-id` 的 `aim-copy-id`。它只依赖管理电脑到目标机的 SSH/SCP，不需要公开 bootstrap URL，并会安装 MySQL Router 与失败任务安全续跑所需的受限执行脚本。
 
-懒猫 1.0.29 可以在“主机资源 → 添加受管主机”页面直接下载 Host Kit 2.4.11，也可以访问 `/downloads/aim-host-kit-2.4.11.tar.gz`。该下载仍受懒猫应用登录保护，压缩包内不包含用户私钥或服务器凭据。升级后应在每台目标机幂等重装一次 Host Kit，使远端 `/opt/aim/aim.sh` 与控制台协议保持一致。2.4.11 新增失败安装的预览与受限清理动作。
+懒猫 1.0.30 可以在“主机资源 → 添加受管主机”页面直接下载 Host Kit 2.4.12，也可以访问 `/downloads/aim-host-kit-2.4.12.tar.gz`。该下载仍受懒猫应用登录保护，压缩包内不包含用户私钥或服务器凭据。升级后应在每台目标机幂等重装一次 Host Kit，使远端 `/opt/aim/router.sh` 获得 Router 下载作用域修复；该升级不会删除 MySQL 数据。
 
 ```sh
 ./scripts/aim-copy-id root@192.168.1.100
@@ -51,6 +51,6 @@ lzc-cli project release .
 
 ## 生成目标机执行脚本
 
-在“部署向导”配置完拓扑后，可以先点击“生成执行脚本”，预览、复制或下载 `.sh`，不必创建 Web 部署任务。导出的脚本依赖 Host Kit 2.4.11 已安装的 `/opt/aim/aim.sh` 和 `/opt/aim/router.sh`，不包含数据库密码；密码只在目标机运行时静默输入。
+在“部署向导”配置完拓扑后，可以先点击“生成执行脚本”，预览、复制或下载 `.sh`，不必创建 Web 部署任务。导出的脚本依赖 Host Kit 2.4.12 已安装的 `/opt/aim/aim.sh` 和 `/opt/aim/router.sh`，不包含数据库密码；密码只在目标机运行时静默输入。
 
 在线备份、监控历史、懒猫网盘归档、OIDC 权限和审计仍由 Web 控制台与受限 `aim-executor` 提供，不属于 `aim.sh` 单文件能力。
