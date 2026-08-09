@@ -147,7 +147,43 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	// A controller restart must never blindly replay an in-flight remote mutation.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := s.DB.ExecContext(ctx, `UPDATE jobs SET state='failed', error='controller restarted before cleanup task started', completed_at=? WHERE kind='deployment_cleanup' AND state='queued'`, now); err != nil {
+		return err
+	}
 	if _, err := s.DB.ExecContext(ctx, `UPDATE jobs SET state='needs_verification', error='controller restarted while task was running', completed_at=? WHERE state IN ('running','preflight','transferring')`, now); err != nil {
+		return err
+	}
+	// A completed non-preview cleanup is the durable proof that its failed
+	// deployment has already been cleaned. Backfill this relation for tasks
+	// created by releases that did not persist the source lifecycle state.
+	if _, err := s.DB.ExecContext(ctx, `
+		UPDATE jobs AS source
+		SET state='cleaned'
+		WHERE source.kind='deployment'
+		  AND source.state IN ('failed','cleanup_running')
+		  AND EXISTS (
+			SELECT 1 FROM jobs AS cleanup
+			WHERE cleanup.kind='deployment_cleanup'
+			  AND cleanup.state='complete'
+			  AND CASE WHEN json_valid(cleanup.payload_json) THEN json_extract(cleanup.payload_json,'$.source_job_id') END=source.id
+			  AND COALESCE(CASE WHEN json_valid(cleanup.payload_json) THEN json_extract(cleanup.payload_json,'$.dry_run') END,0)=0
+		  )`); err != nil {
+		return err
+	}
+	// Interrupted real cleanup is safe to retry: the restricted cleanup command
+	// is idempotent, while silently replaying it after a restart is not allowed.
+	if _, err := s.DB.ExecContext(ctx, `
+		UPDATE jobs AS source
+		SET state='failed'
+		WHERE source.kind='deployment'
+		  AND source.state='cleanup_running'
+		  AND EXISTS (
+			SELECT 1 FROM jobs AS cleanup
+			WHERE cleanup.kind='deployment_cleanup'
+			  AND cleanup.state IN ('failed','needs_verification')
+			  AND CASE WHEN json_valid(cleanup.payload_json) THEN json_extract(cleanup.payload_json,'$.source_job_id') END=source.id
+			  AND COALESCE(CASE WHEN json_valid(cleanup.payload_json) THEN json_extract(cleanup.payload_json,'$.dry_run') END,0)=0
+		  )`); err != nil {
 		return err
 	}
 	_, err := s.DB.ExecContext(ctx, `DELETE FROM host_locks`)

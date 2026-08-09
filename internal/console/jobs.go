@@ -277,6 +277,12 @@ func (m *JobManager) CreateFailedDeploymentCleanup(ctx context.Context, user *Us
 	if err := m.Store.DB.QueryRowContext(ctx, `SELECT kind,state,payload_json FROM jobs WHERE id=?`, sourceJobID).Scan(&kind, &state, &payloadJSON); err != nil {
 		return "", "", errors.New("找不到失败的部署任务")
 	}
+	if kind == "deployment" && state == "cleaned" {
+		return "", "", errors.New("该失败部署已完成清理，无需重复执行")
+	}
+	if kind == "deployment" && state == "cleanup_running" {
+		return "", "", errors.New("该失败部署正在清理，请勿重复提交")
+	}
 	if kind != "deployment" || state != "failed" {
 		return "", "", errors.New("只有 FAILED 状态的部署任务可以清理远端残留")
 	}
@@ -338,6 +344,19 @@ func (m *JobManager) CreateFailedDeploymentCleanup(ctx context.Context, user *Us
 		return "", "", err
 	}
 	defer tx.Rollback()
+	if !input.DryRun {
+		result, err := tx.ExecContext(ctx, `UPDATE jobs SET state='cleanup_running' WHERE id=? AND kind='deployment' AND state='failed'`, sourceJobID)
+		if err != nil {
+			return "", "", err
+		}
+		reserved, err := result.RowsAffected()
+		if err != nil {
+			return "", "", err
+		}
+		if reserved != 1 {
+			return "", "", errors.New("该失败部署已被清理或正在清理，请勿重复提交")
+		}
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO jobs(id,kind,state,payload_json,created_by,created_at,confirmation_hash,preview_expires_at) VALUES(?,'deployment_cleanup','queued',?,?,?,?,?)`,
 		jobID, string(cleanupJSON), user.ID, now, confirmationHash, previewExpires); err != nil {
 		return "", "", err
@@ -364,6 +383,7 @@ func (m *JobManager) runFailedDeploymentCleanup(jobID string, payload failedDepl
 	defer m.releaseLocks(jobID)
 	if err := m.transitionJob(jobID, "running"); err != nil {
 		m.fail(jobID, err)
+		m.restoreFailedDeploymentAfterCleanup(payload)
 		return
 	}
 	_, _ = m.Store.DB.Exec(`UPDATE jobs SET started_at=? WHERE id=?`, time.Now().UTC().Format(time.RFC3339Nano), jobID)
@@ -403,9 +423,28 @@ func (m *JobManager) runFailedDeploymentCleanup(jobID string, payload failedDepl
 	}
 	if len(failures) > 0 {
 		m.fail(jobID, errors.New("部分主机清理失败: "+strings.Join(failures, "; ")))
+		m.restoreFailedDeploymentAfterCleanup(payload)
 		return
 	}
 	m.complete(jobID, fmt.Sprintf(`{"source_job_id":%q,"dry_run":%t}`, payload.SourceJobID, payload.DryRun))
+	if !payload.DryRun {
+		var cleanupState string
+		if err := m.Store.DB.QueryRow(`SELECT state FROM jobs WHERE id=?`, jobID).Scan(&cleanupState); err == nil && cleanupState == "complete" {
+			if result, err := m.Store.DB.Exec(`UPDATE jobs SET state='cleaned' WHERE id=? AND kind='deployment' AND state='cleanup_running'`, payload.SourceJobID); err != nil {
+				m.log(jobID, "error", "cleanup", "远端清理已完成，但无法持久化原任务状态: "+err.Error())
+			} else if changed, _ := result.RowsAffected(); changed != 1 {
+				m.log(jobID, "error", "cleanup", "远端清理已完成，但原任务状态未能更新")
+			}
+		} else {
+			m.restoreFailedDeploymentAfterCleanup(payload)
+		}
+	}
+}
+
+func (m *JobManager) restoreFailedDeploymentAfterCleanup(payload failedDeploymentCleanupPayload) {
+	if !payload.DryRun {
+		_, _ = m.Store.DB.Exec(`UPDATE jobs SET state='failed' WHERE id=? AND kind='deployment' AND state='cleanup_running'`, payload.SourceJobID)
+	}
 }
 
 func (m *JobManager) VerifyInterruptedDeployment(ctx context.Context, user *User, remoteAddr, jobID string) error {

@@ -455,6 +455,67 @@ func TestFailedDeploymentCleanupRejectsDeletedHostsBeforeCreatingJob(t *testing.
 	}
 }
 
+func TestCompletedCleanupBackfillsSourceStateAndRejectsRepeat(t *testing.T) {
+	store := testStore(t)
+	if _, err := store.BootstrapAdmin(context.Background(), "admin", "very-strong-admin-password"); err != nil {
+		t.Fatal(err)
+	}
+	deployment := DeploymentRequest{
+		Name:    "already-cleaned",
+		Mode:    "single",
+		Version: "8.0.46",
+		Port:    3306,
+		Nodes:   []DeploymentNode{{HostID: 99}},
+	}
+	payload, _ := json.Marshal(deployment)
+	if _, err := store.DB.Exec(`INSERT INTO jobs(id,kind,state,payload_json,created_by,created_at) VALUES('failed-cleaned','deployment','failed',?,1,'2026-08-09T00:00:00Z')`, payload); err != nil {
+		t.Fatal(err)
+	}
+	cleanupPayload := `{"source_job_id":"failed-cleaned","deployment":{"name":"already-cleaned"},"dry_run":false,"confirm":true}`
+	if _, err := store.DB.Exec(`INSERT INTO jobs(id,kind,state,payload_json,created_by,created_at,completed_at) VALUES('cleanup-complete','deployment_cleanup','complete',?,1,'2026-08-09T00:01:00Z','2026-08-09T00:02:00Z')`, cleanupPayload); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	if err := store.DB.QueryRow(`SELECT state FROM jobs WHERE id='failed-cleaned'`).Scan(&state); err != nil || state != "cleaned" {
+		t.Fatalf("completed cleanup did not backfill source state: state=%q err=%v", state, err)
+	}
+	manager := &JobManager{Store: store}
+	_, _, err := manager.CreateFailedDeploymentCleanup(context.Background(), &User{ID: 1, Username: "admin", Role: "admin", Active: true}, "127.0.0.1", "failed-cleaned", FailedDeploymentCleanupInput{DryRun: true})
+	if err == nil || !strings.Contains(err.Error(), "已完成清理") {
+		t.Fatalf("completed cleanup was allowed to run again: %v", err)
+	}
+}
+
+func TestInterruptedRealCleanupRestoresSourceForRetry(t *testing.T) {
+	store := testStore(t)
+	if _, err := store.BootstrapAdmin(context.Background(), "admin", "very-strong-admin-password"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`INSERT INTO jobs(id,kind,state,payload_json,created_by,created_at) VALUES('cleanup-source','deployment','cleanup_running','{}',1,'2026-08-09T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	cleanupPayload := `{"source_job_id":"cleanup-source","deployment":{},"dry_run":false,"confirm":true}`
+	if _, err := store.DB.Exec(`INSERT INTO jobs(id,kind,state,payload_json,created_by,created_at) VALUES('cleanup-running','deployment_cleanup','running',?,1,'2026-08-09T00:01:00Z')`, cleanupPayload); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var sourceState, cleanupState string
+	if err := store.DB.QueryRow(`SELECT state FROM jobs WHERE id='cleanup-source'`).Scan(&sourceState); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB.QueryRow(`SELECT state FROM jobs WHERE id='cleanup-running'`).Scan(&cleanupState); err != nil {
+		t.Fatal(err)
+	}
+	if sourceState != "failed" || cleanupState != "needs_verification" {
+		t.Fatalf("interrupted cleanup was not made safely retryable: source=%q cleanup=%q", sourceState, cleanupState)
+	}
+}
+
 func TestHostDeletionRequiresFailedDeploymentResolution(t *testing.T) {
 	store := testStore(t)
 	if _, err := store.BootstrapAdmin(context.Background(), "admin", "very-strong-admin-password"); err != nil {

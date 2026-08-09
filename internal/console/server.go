@@ -188,7 +188,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 	result := map[string]int{}
 	for name, query := range map[string]string{
 		"hosts": "SELECT COUNT(*) FROM hosts", "instances": "SELECT COUNT(*) FROM instances",
-		"clusters": "SELECT COUNT(*) FROM clusters", "running_jobs": "SELECT COUNT(*) FROM jobs WHERE state IN ('queued','preflight','transferring','running')",
+		"clusters": "SELECT COUNT(*) FROM clusters", "running_jobs": "SELECT COUNT(*) FROM jobs WHERE state IN ('queued','preflight','transferring','running','cleanup_running')",
 	} {
 		var count int
 		_ = s.Store.DB.QueryRowContext(r.Context(), query).Scan(&count)
@@ -376,8 +376,8 @@ func (s *Server) deleteHost(w http.ResponseWriter, r *http.Request) {
 	}{
 		{`SELECT COUNT(*) FROM instances WHERE host_id=?`, "该主机仍有关联的 MySQL 实例，不能删除"},
 		{`SELECT COUNT(*) FROM jobs j, json_each(j.payload_json,'$.nodes') node WHERE j.kind='deployment' AND j.state='failed' AND CAST(json_extract(node.value,'$.host_id') AS INTEGER)=?`, "该主机仍关联可清理的失败部署任务；请先清理失败安装，或删除对应失败任务记录后再删除主机"},
-		{`SELECT COUNT(*) FROM job_hosts jh JOIN jobs j ON j.id=jh.job_id WHERE jh.host_id=? AND j.state NOT IN ('complete','failed')`, "该主机仍有运行中或待核实任务，不能删除"},
-		{`SELECT COUNT(*) FROM host_locks hl JOIN jobs j ON j.id=hl.job_id WHERE hl.host_id=? AND j.state NOT IN ('complete','failed')`, "该主机仍有任务锁，不能删除"},
+		{`SELECT COUNT(*) FROM job_hosts jh JOIN jobs j ON j.id=jh.job_id WHERE jh.host_id=? AND j.state NOT IN ('complete','failed','cleaned')`, "该主机仍有运行中或待核实任务，不能删除"},
+		{`SELECT COUNT(*) FROM host_locks hl JOIN jobs j ON j.id=hl.job_id WHERE hl.host_id=? AND j.state NOT IN ('complete','failed','cleaned')`, "该主机仍有任务锁，不能删除"},
 	} {
 		var count int
 		if err := tx.QueryRowContext(r.Context(), dependency.query, id).Scan(&count); err != nil {
@@ -389,14 +389,14 @@ func (s *Server) deleteHost(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if _, err := tx.ExecContext(r.Context(), `DELETE FROM host_locks WHERE host_id=? AND job_id IN (SELECT id FROM jobs WHERE state IN ('complete','failed'))`, id); err != nil {
+	if _, err := tx.ExecContext(r.Context(), `DELETE FROM host_locks WHERE host_id=? AND job_id IN (SELECT id FROM jobs WHERE state IN ('complete','failed','cleaned'))`, id); err != nil {
 		writeError(w, http.StatusInternalServerError, "清理已结束任务锁失败")
 		return
 	}
 	// Terminal task logs and immutable payloads retain the deployment history.
 	// Detach only their host relation so a host with no managed database can be
 	// removed even when it was previously used by a failed deployment.
-	result, err := tx.ExecContext(r.Context(), `DELETE FROM job_hosts WHERE host_id=? AND job_id IN (SELECT id FROM jobs WHERE state IN ('complete','failed'))`, id)
+	result, err := tx.ExecContext(r.Context(), `DELETE FROM job_hosts WHERE host_id=? AND job_id IN (SELECT id FROM jobs WHERE state IN ('complete','failed','cleaned'))`, id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "解除历史任务主机关联失败")
 		return
@@ -642,8 +642,8 @@ func (s *Server) deleteJob(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if state != "failed" {
-		writeError(w, http.StatusConflict, "仅允许删除 FAILED 状态的任务；运行中或待核实任务必须保留")
+	if state != "failed" && state != "cleaned" {
+		writeError(w, http.StatusConflict, "仅允许删除 FAILED 或 CLEANED 状态的任务；运行中或待核实任务必须保留")
 		return
 	}
 	if _, err := tx.ExecContext(r.Context(), `DELETE FROM host_locks WHERE job_id=?`, jobID); err != nil {
