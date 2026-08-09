@@ -30,4 +30,4 @@ sudo /tmp/aim-bootstrap-20260715120000-12345/install-staged-target.sh
 
 安装成功后，在 AIM 页面填写主机信息，并导入 `~/.ssh/aim/aim_console_ed25519`。不要导入 `.pub` 文件。
 
-Host Kit 2.4.5 是使用安全续跑功能的最低版本。它同时支持 MySQL Router；重复安装只会更新受限工具，不会删除现有 MySQL 数据。
+Host Kit 2.4.9 是控制台 1.0.27 安全续跑功能的配套版本。它会识别已配置但停止的 AIM 实例，修复早期失败部署留下的 `my.cnf` 属主和 MySQL 软件目录权限，兼容 Ubuntu 24.04 的 `libaio1t64` SONAME，并在 systemd 启动失败时立即回传诊断。它同时支持 MySQL Router；重复安装只会更新受限工具，不会删除现有 MySQL 数据。

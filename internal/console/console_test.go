@@ -97,6 +97,16 @@ func TestMediaCompatibility(t *testing.T) {
 	}
 }
 
+func TestStoppedAIMInstanceIsAResumeCandidate(t *testing.T) {
+	facts := executor.HostFacts{Ports: map[int]string{3319: "available"}, AIMInstances: map[int]string{3319: "configured"}}
+	if !hasResumableAIMInstance(facts, 3319) {
+		t.Fatal("stopped AIM instance was not selected for bounded resume")
+	}
+	if hasResumableAIMInstance(executor.HostFacts{AIMInstances: map[int]string{}}, 3319) {
+		t.Fatal("missing AIM metadata was selected for resume")
+	}
+}
+
 func TestChunkUploadAndChecksum(t *testing.T) {
 	store := testStore(t)
 	if _, err := store.BootstrapAdmin(context.Background(), "admin", "very-strong-admin-password"); err != nil {

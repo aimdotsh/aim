@@ -168,6 +168,7 @@ type HostFacts struct {
 	MemoryMB     uint64         `json:"memory_mb"`
 	DiskFreeMB   uint64         `json:"disk_free_mb"`
 	Ports        map[int]string `json:"ports,omitempty"`
+	AIMInstances map[int]string `json:"aim_instances,omitempty"`
 }
 
 type Event struct {

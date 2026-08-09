@@ -95,6 +95,10 @@ type deploymentTarget struct {
 	resume     bool
 }
 
+func hasResumableAIMInstance(facts executor.HostFacts, port int) bool {
+	return facts.AIMInstances[port] == "configured"
+}
+
 func (m *JobManager) CreateDeployment(ctx context.Context, user *User, remoteAddr string, input DeploymentRequest) (string, error) {
 	if err := validateDeployment(&input); err != nil {
 		return "", err
@@ -702,9 +706,13 @@ func (m *JobManager) runDeployment(jobID string, deployment DeploymentRequest) {
 			m.fail(jobID, fmt.Errorf("已完成 MGR 主机 %s 的 XCom 端口 %d 不再监听，拒绝继续 join", host.Name, deployment.MGRPort))
 			return
 		}
-		resume := !databaseReady && facts.Ports[deployment.Port] == "listening"
+		resume := !databaseReady && (facts.Ports[deployment.Port] == "listening" || hasResumableAIMInstance(facts, deployment.Port))
 		if resume {
-			m.log(jobID, "warning", "preflight", fmt.Sprintf("主机 %s 的端口 %d 已监听；将通过受限恢复流程核验 AIM 配置、版本和凭据，核验成功后续跑", host.Name, deployment.Port))
+			if facts.Ports[deployment.Port] == "listening" {
+				m.log(jobID, "warning", "preflight", fmt.Sprintf("主机 %s 的端口 %d 已监听；将通过受限恢复流程核验 AIM 配置、版本和凭据，核验成功后续跑", host.Name, deployment.Port))
+			} else {
+				m.log(jobID, "warning", "preflight", fmt.Sprintf("主机 %s 存在已配置但停止的 AIM 实例；将核验配置与权限、启动服务并从中断点续跑", host.Name))
+			}
 		}
 		if deployment.Mode == "mgr" && !contains(facts.IPv4, node.LocalIP) {
 			m.fail(jobID, fmt.Errorf("主机 %s 不拥有 MGR 本机 IP %s", host.Name, node.LocalIP))

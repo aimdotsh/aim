@@ -927,11 +927,70 @@ ensure_mysql_user() {
     fi
 }
 
+missing_mysql_runtime_libraries() {
+    ldd "$BASEDIR/bin/mysqld" 2>/dev/null | awk '/not found/ {print $1}' | paste -sd, -
+}
+
+trusted_system_library_path() {
+    [[ "$1" == /lib/* || "$1" == /usr/lib/* ]]
+}
+
+repair_debian_libaio_compatibility() {
+    local target link resolved_target
+    [[ "$OS_FAMILY" == debian ]] || return 1
+    command -v ldconfig >/dev/null 2>&1 || return 1
+    target="$(ldconfig -p 2>/dev/null | awk '$1 == "libaio.so.1t64" {print $NF; exit}')"
+    [[ "$target" == /* && -r "$target" ]] || return 1
+    resolved_target="$(readlink -f -- "$target")"
+    trusted_system_library_path "$resolved_target" ||
+        die "refusing an untrusted libaio compatibility target: $resolved_target"
+    link="$(dirname -- "$target")/libaio.so.1"
+    if [[ -e "$link" || -L "$link" ]]; then
+        [[ "$(readlink -f -- "$link")" == "$resolved_target" ]] ||
+            die "existing libaio.so.1 does not resolve to the installed libaio1t64 library"
+        return 0
+    fi
+    log "installing Ubuntu libaio1t64 compatibility link for Oracle MySQL generic binaries"
+    ln -s "$(basename -- "$target")" "$link"
+    ldconfig
+}
+
+verify_mysql_runtime_libraries() {
+    local missing
+    missing="$(missing_mysql_runtime_libraries)"
+    if [[ ",$missing," == *,libaio.so.1,* ]]; then
+        repair_debian_libaio_compatibility || true
+        missing="$(missing_mysql_runtime_libraries)"
+    fi
+    [[ -z "$missing" ]] ||
+        die "MySQL runtime libraries are missing: $missing (install the distribution compatibility packages)"
+}
+
+secure_mysql_binary_tree() {
+    if (( DRY_RUN )); then
+        log "would normalize MySQL binary ownership and verify ${MYSQL_USER} can execute mysqld"
+        return
+    fi
+    [[ -d "$BASEDIR" && ! -L "$BASEDIR" ]] ||
+        die "MySQL base directory must be a regular directory: $BASEDIR"
+    chown -R root:"$MYSQL_GROUP" "$BASEDIR"
+    chmod 0750 "$BASEDIR"
+    if ! runuser -u "$MYSQL_USER" -- test -x "$BASEDIR/bin/mysqld"; then
+        warn "$MYSQL_USER cannot execute $BASEDIR/bin/mysqld"
+        command -v namei >/dev/null 2>&1 && namei -l "$BASEDIR/bin/mysqld" >&2 || true
+        die "MySQL binary tree permissions prevent the service account from executing mysqld"
+    fi
+}
+
 extract_mysql() {
-    local actual missing
+    local actual
     if [[ -x "$BASEDIR/bin/mysqld" ]]; then
-        missing="$(ldd "$BASEDIR/bin/mysqld" 2>/dev/null | awk '/not found/ {print $1}' | paste -sd, -)"
-        [[ -z "$missing" ]] || die "MySQL runtime libraries are missing: $missing (install the distribution compatibility packages)"
+        # A previous attempt can finish extracting the archive and then fail
+        # dependency validation.  Always repair the shared binary tree before
+        # accepting it for reuse; otherwise a restrictive directory owner or
+        # mode can make systemd fail with status=203/EXEC.
+        secure_mysql_binary_tree
+        verify_mysql_runtime_libraries
         actual="$("$BASEDIR/bin/mysqld" --no-defaults --version 2>/dev/null | awk '{print $3}')"
         [[ "$actual" == "$VERSION" ]] || die "existing $BASEDIR contains MySQL $actual, expected $VERSION"
         log "reusing existing MySQL binaries in $BASEDIR"
@@ -950,11 +1009,12 @@ extract_mysql() {
         *) die "unsupported archive format: $ARCHIVE" ;;
     esac
     [[ -x "$BASEDIR/bin/mysqld" ]] || die "archive does not contain bin/mysqld"
-    missing="$(ldd "$BASEDIR/bin/mysqld" 2>/dev/null | awk '/not found/ {print $1}' | paste -sd, -)"
-    [[ -z "$missing" ]] || die "MySQL runtime libraries are missing: $missing (install the distribution compatibility packages)"
+    # Normalize immediately after extraction.  Any later validation failure
+    # leaves a safely reusable tree instead of a root-only partial install.
+    secure_mysql_binary_tree
+    verify_mysql_runtime_libraries
     actual="$("$BASEDIR/bin/mysqld" --no-defaults --version 2>/dev/null | awk '{print $3}')"
     [[ "$actual" == "$VERSION" ]] || die "archive version is $actual, expected $VERSION"
-    run chown -R root:"$MYSQL_GROUP" "$BASEDIR"
 }
 
 memory_megabytes() {
@@ -1084,9 +1144,9 @@ ${gtid_config}
 ${role_config}
 ${mgr_config}
 EOF
-    chmod 640 "$CNF_FILE"
-    chown root:"$MYSQL_GROUP" "$CNF_FILE"
     chown -R "$MYSQL_USER":"$MYSQL_GROUP" "$(dirname -- "$CNF_FILE")" "$DATADIR" "$LOGDIR" "$TMPDIR_INSTANCE"
+    chown root:"$MYSQL_GROUP" "$CNF_FILE"
+    chmod 640 "$CNF_FILE"
 }
 
 initialize_database() {
@@ -1194,7 +1254,12 @@ PrivateTmp=false
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
+    systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
     systemctl enable --now "$SERVICE_NAME"
+}
+
+systemd_runtime_available() {
+    command -v systemctl >/dev/null 2>&1 && [[ -d /run/systemd/system ]]
 }
 
 start_database() {
@@ -1209,6 +1274,14 @@ wait_for_mysql() {
     attempts=$(( (MYSQL_START_TIMEOUT + 1) / 2 ))
     for (( _attempt=1; _attempt<=attempts; _attempt++ )); do
         if "$MYSQLADMIN" --protocol=socket --socket="$SOCKET" --user=root ping >/dev/null 2>&1; then return; fi
+        if systemd_runtime_available && systemctl is-failed --quiet "$SERVICE_NAME" 2>/dev/null; then
+            warn "systemd reports ${SERVICE_NAME} failed before MySQL became ready"
+            systemctl status "$SERVICE_NAME" --no-pager -l >&2 || true
+            command -v journalctl >/dev/null 2>&1 &&
+                journalctl -u "$SERVICE_NAME" -n 80 --no-pager >&2 || true
+            tail -n 80 "$LOGDIR/error.log" >&2 || true
+            die "MySQL service $SERVICE_NAME failed during startup; inspect the systemd diagnostics above"
+        fi
         if (( _attempt % 15 == 0 )); then
             log "waiting for MySQL on port $PORT (${_attempt} attempts, timeout ${MYSQL_START_TIMEOUT}s)"
         fi
@@ -1279,17 +1352,36 @@ expect_config_value() {
         die "existing AIM configuration mismatch for $key: expected '$expected', found '${actual:-missing}'"
 }
 
+secure_resumable_config_permissions() {
+    local owner mysql_owner
+    owner="$(stat -c '%u' -- "$CNF_FILE")"
+    [[ -z "$(find "$CNF_FILE" -maxdepth 0 -perm /022 -print -quit)" ]] ||
+        die "existing AIM configuration is writable by group or others"
+    if [[ "$owner" == 0 ]]; then
+        return
+    fi
+    mysql_owner="$(id -u "$MYSQL_USER" 2>/dev/null)" ||
+        die "cannot resolve the configured MySQL user $MYSQL_USER"
+    [[ "$owner" == "$mysql_owner" ]] ||
+        die "existing AIM configuration is not owned by root or the legacy MySQL owner"
+    log "repairing legacy AIM configuration ownership from $MYSQL_USER to root"
+    chown root:"$MYSQL_GROUP" "$CNF_FILE"
+    chmod 640 "$CNF_FILE"
+    [[ "$(stat -c '%u' -- "$CNF_FILE")" == 0 ]] ||
+        die "could not restore root ownership on the existing AIM configuration"
+    [[ -z "$(find "$CNF_FILE" -maxdepth 0 -perm /022 -print -quit)" ]] ||
+        die "existing AIM configuration remains writable by group or others"
+}
+
 validate_resumable_instance() {
-    local owner actual_version
+    local actual_version
     [[ -f "$CNF_FILE" && ! -L "$CNF_FILE" ]] ||
         die "port $PORT is listening but no regular AIM configuration exists at $CNF_FILE"
     [[ "$(head -n 1 "$CNF_FILE")" == '# Generated by AIM '* ]] ||
         die "existing configuration was not generated by AIM; refusing to take over port $PORT"
     if (( ! DRY_RUN )); then
-        owner="$(stat -c '%u' "$CNF_FILE")"
-        [[ "$owner" == 0 ]] || die "existing AIM configuration is not owned by root"
-        [[ -z "$(find "$CNF_FILE" -maxdepth 0 -perm /022 -print -quit)" ]] ||
-            die "existing AIM configuration is writable by group or others"
+        secure_resumable_config_permissions
+        secure_mysql_binary_tree
     fi
     [[ -x "$BASEDIR/bin/mysqld" && -x "$MYSQL" && -x "$MYSQLADMIN" ]] ||
         die "existing AIM binary tree is incomplete: $BASEDIR"
@@ -1319,6 +1411,10 @@ resume_instance() {
         log "would wait up to ${MYSQL_START_TIMEOUT}s and continue the interrupted $ROLE deployment"
         machine_result true resume preview
         return
+    fi
+    if ! port_is_listening; then
+        log "existing AIM instance is stopped; starting $SERVICE_NAME before recovery"
+        start_database
     fi
     wait_for_mysql
     ensure_root_password

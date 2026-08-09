@@ -33,6 +33,26 @@ LOG_ROOT="$tmp/log/mysql"
 TMP_ROOT="$tmp/tmp/mysql"
 DRY_RUN=1
 derive_instance_paths
+
+(
+    DRY_RUN=0
+    config_owner=""
+    memory_megabytes() { printf '2048\n'; }
+    chown() {
+        if [[ "$1" == -R ]]; then
+            config_owner="$MYSQL_USER"
+            return
+        fi
+        [[ "$1" == "root:$MYSQL_GROUP" && "$2" == "$CNF_FILE" ]]
+        config_owner=root
+    }
+    write_config
+    [[ "$config_owner" == root ]] || {
+        printf 'write_config left my.cnf owned by %s instead of root\n' "$config_owner" >&2
+        exit 1
+    }
+)
+
 mkdir -p "$BASEDIR/bin" "$(dirname -- "$CNF_FILE")"
 cat >"$BASEDIR/bin/mysqld" <<'EOF'
 #!/usr/bin/env bash
@@ -59,6 +79,39 @@ loose-group_replication_group_seeds = 10.17.0.12:33061,10.17.0.13:33061,10.17.0.
 loose-group_replication_ip_allowlist = 10.17.0.12,10.17.0.13,10.17.0.89
 EOF
 
+(
+    DRY_RUN=0
+    config_owner=1001
+    stat() { printf '%s\n' "$config_owner"; }
+    id() {
+        [[ "$1" == -u && "$2" == "$MYSQL_USER" ]]
+        printf '1001\n'
+    }
+    find() { return 0; }
+    chown() {
+        [[ "$1" == "root:$MYSQL_GROUP" && "$2" == "$CNF_FILE" ]]
+        config_owner=0
+    }
+    chmod() { [[ "$1" == 640 && "$2" == "$CNF_FILE" ]]; }
+    secure_mysql_binary_tree() { :; }
+    validate_resumable_instance
+    [[ "$config_owner" == 0 ]] || {
+        printf 'resume did not repair legacy mysql-owned my.cnf\n' >&2
+        exit 1
+    }
+)
+
+if (
+    DRY_RUN=0
+    stat() { printf '2002\n'; }
+    id() { printf '1001\n'; }
+    find() { return 0; }
+    validate_resumable_instance
+) >/dev/null 2>&1; then
+    printf 'resume accepted a configuration owned by an unrelated user\n' >&2
+    exit 1
+fi
+
 validate_resumable_instance
 sed -i.bak 's/server_id = 101/server_id = 999/' "$CNF_FILE"
 if (validate_resumable_instance) >/dev/null 2>&1; then
@@ -66,4 +119,4 @@ if (validate_resumable_instance) >/dev/null 2>&1; then
     exit 1
 fi
 
-printf 'low-memory sizing and bounded resume validation: ok\n'
+printf 'low-memory sizing, config ownership, and bounded resume validation: ok\n'
