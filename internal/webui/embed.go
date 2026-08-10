@@ -7,5 +7,5 @@ import "embed"
 // Keep historical Host Kit archives in the repository, but only ship the
 // current release in the console binary. Embedding dist/* recursively made
 // every application image grow by another full Host Kit on each release.
-//go:embed dist/index.html dist/assets/* dist/downloads/aim-host-kit-2.4.13.tar.gz
+//go:embed dist/index.html dist/assets/* dist/downloads/aim-host-kit-2.4.14.tar.gz
 var Dist embed.FS

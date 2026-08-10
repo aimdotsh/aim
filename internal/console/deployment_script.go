@@ -210,7 +210,7 @@ func BuildDeploymentScript(input DeploymentRequest, media *Media) (DeploymentScr
 		filename = "mysql-deployment"
 	}
 	instructions := []string{
-		"目标机需先通过 Host Kit 2.4.13 安装 /opt/aim/aim.sh；脚本本身不包含数据库密码。",
+		"目标机需先通过 Host Kit 2.4.14 安装 /opt/aim/aim.sh；脚本本身不包含数据库密码。",
 		"复制脚本到目标机，chmod 700 后以 root 执行；密码会在目标机终端静默询问。",
 	}
 	if len(input.Nodes) > 1 {

@@ -70,6 +70,7 @@ SERVICE_NAME=""
 MYSQL=""
 MYSQLADMIN=""
 CLEANUP_FAILED=0
+REPLICA_PROVISIONING_WRITABLE=0
 
 usage() {
     cat <<EOF
@@ -180,6 +181,7 @@ machine_result() {
 }
 die() {
     local message="$*"
+    restore_replica_read_only_best_effort
     printf '[aim] ERROR: %s\n' "$message" >&2
     if (( MACHINE_READABLE && ! MACHINE_ERROR_EMITTED )); then
         MACHINE_ERROR_EMITTED=1
@@ -198,6 +200,7 @@ run() {
 
 on_error() {
     local rc=$?
+    restore_replica_read_only_best_effort
     printf '[aim] ERROR: command failed at line %s (exit %s)\n' "${BASH_LINENO[0]}" "$rc" >&2
     if (( MACHINE_READABLE && ! MACHINE_ERROR_EMITTED )); then
         MACHINE_ERROR_EMITTED=1
@@ -1406,6 +1409,70 @@ mysql_root() {
     MYSQL_PWD="$ROOT_PASSWORD" "$MYSQL" --protocol=socket --socket="$SOCKET" --user=root --batch --skip-column-names "$@"
 }
 
+replica_supports_super_read_only() {
+    [[ "$SERIES" =~ ^8\. ]] || { [[ "$SERIES" == 5.7 ]] && version_ge "$VERSION" 5.7.8; }
+}
+
+replica_read_only_sql() {
+    local enabled="$1"
+    if replica_supports_super_read_only; then
+        if [[ "$enabled" == 1 ]]; then
+            printf '%s' 'SET GLOBAL read_only=ON; SET GLOBAL super_read_only=ON;'
+        else
+            printf '%s' 'SET GLOBAL super_read_only=OFF; SET GLOBAL read_only=OFF;'
+        fi
+    elif [[ "$enabled" == 1 ]]; then
+        printf '%s' 'SET GLOBAL read_only=ON;'
+    else
+        printf '%s' 'SET GLOBAL read_only=OFF;'
+    fi
+}
+
+prepare_replica_provisioning() {
+    [[ "$ROLE" == replica ]] || return 0
+    if (( DRY_RUN )); then
+        log "would temporarily disable replica read-only protection during credential and channel provisioning"
+        return
+    fi
+    local sql
+    sql="$(replica_read_only_sql 0)"
+    if [[ -n "$ROOT_PASSWORD" ]] && MYSQL_PWD="$ROOT_PASSWORD" "$MYSQL" --protocol=socket --socket="$SOCKET" --user=root \
+        --batch --skip-column-names -e 'SELECT 1;' >/dev/null 2>&1; then
+        mysql_root -e "$sql"
+    elif "$MYSQL" --protocol=socket --socket="$SOCKET" --user=root --batch --skip-column-names \
+        -e 'SELECT 1;' >/dev/null 2>&1; then
+        "$MYSQL" --protocol=socket --socket="$SOCKET" --user=root --batch --skip-column-names -e "$sql"
+    else
+        die "cannot authenticate locally to prepare replica provisioning"
+    fi
+    REPLICA_PROVISIONING_WRITABLE=1
+    log "temporarily disabled replica read-only protection for local provisioning"
+}
+
+finalize_replica_read_only() {
+    [[ "$ROLE" == replica ]] || return 0
+    (( DRY_RUN )) && { log "would restore replica read-only and super-read-only protection"; return; }
+    mysql_root -e "$(replica_read_only_sql 1)"
+    REPLICA_PROVISIONING_WRITABLE=0
+    log "restored replica read-only protection"
+}
+
+restore_replica_read_only_best_effort() {
+    (( REPLICA_PROVISIONING_WRITABLE )) || return 0
+    [[ -n "$MYSQL" && -x "$MYSQL" ]] || return 0
+    local sql
+    sql="$(replica_read_only_sql 1)"
+    set +e
+    if [[ -n "$ROOT_PASSWORD" ]] && MYSQL_PWD="$ROOT_PASSWORD" "$MYSQL" --protocol=socket --socket="$SOCKET" --user=root \
+        --batch --skip-column-names -e 'SELECT 1;' >/dev/null 2>&1; then
+        mysql_root -e "$sql" >/dev/null 2>&1
+    else
+        "$MYSQL" --protocol=socket --socket="$SOCKET" --user=root --batch --skip-column-names -e "$sql" >/dev/null 2>&1
+    fi
+    REPLICA_PROVISIONING_WRITABLE=0
+    set -e
+}
+
 secure_root() {
     [[ -n "$ROOT_PASSWORD" ]] || ROOT_PASSWORD="$(random_password)"
     (( DRY_RUN )) && { log "would set the local root password"; return; }
@@ -1528,9 +1595,11 @@ resume_instance() {
         start_database
     fi
     wait_for_mysql
+    prepare_replica_provisioning
     ensure_root_password
     configure_source
     configure_replica
+    finalize_replica_read_only
     configure_mgr
     verify_installation
     log "interrupted AIM deployment resumed successfully"
@@ -1752,9 +1821,11 @@ main() {
     write_control_scripts
     start_database
     wait_for_mysql
+    prepare_replica_provisioning
     secure_root
     configure_source
     configure_replica
+    finalize_replica_read_only
     configure_mgr
     verify_installation
     summary

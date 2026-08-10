@@ -687,12 +687,12 @@ onMounted(restoreSession)
       </div>
 
       <div v-else-if="page === 'hosts'" class="page-stack">
-        <section v-if="isAdmin" class="panel"><div class="panel-head"><div><p class="eyebrow">HOST ONBOARDING</p><h3>添加受管主机</h3></div><a class="button secondary" href="/downloads/aim-host-kit-2.4.13.tar.gz" download><Archive />下载 Host Kit 2.4.13</a></div>
+        <section v-if="isAdmin" class="panel"><div class="panel-head"><div><p class="eyebrow">HOST ONBOARDING</p><h3>添加受管主机</h3></div><a class="button secondary" href="/downloads/aim-host-kit-2.4.14.tar.gz" download><Archive />下载 Host Kit 2.4.14</a></div>
           <div class="host-kit-guide">
-            <div class="host-kit-intro"><span class="guide-icon"><TerminalSquare /></span><div><p class="eyebrow">HOST KIT 2.4.13</p><h3>先在管理电脑初始化目标主机</h3><p>支持 macOS、Linux 或 WSL；目标机支持 RHEL 系（含 OpenCloudOS）、Debian/Ubuntu 与 SUSE。工具会生成 AIM 专用密钥，识别目标机架构，复制 MySQL/Router 受限执行器，并提供失败部署的安全续跑与受限清理能力。已安装旧版的主机也应重新执行一次，幂等升级不会删除 MySQL 数据。</p></div><span class="safety-badge"><ShieldCheck />不会复制私钥到目标机</span></div>
+            <div class="host-kit-intro"><span class="guide-icon"><TerminalSquare /></span><div><p class="eyebrow">HOST KIT 2.4.14</p><h3>先在管理电脑初始化目标主机</h3><p>支持 macOS、Linux 或 WSL；目标机支持 RHEL 系（含 OpenCloudOS）、Debian/Ubuntu 与 SUSE。工具会生成 AIM 专用密钥，识别目标机架构，复制 MySQL/Router 受限执行器，并提供失败部署的安全续跑与受限清理能力。已安装旧版的主机也应重新执行一次，幂等升级不会删除 MySQL 数据。</p></div><span class="safety-badge"><ShieldCheck />不会复制私钥到目标机</span></div>
             <div class="host-kit-steps">
-              <article><span class="step-number">01</span><div><h4>下载并解压</h4><p>先点击下面的按钮下载安装包。下载完成后，在能够 SSH 登录目标服务器的管理电脑上打开终端并执行：</p><a class="button primary guide-download" href="/downloads/aim-host-kit-2.4.13.tar.gz" download><Archive />下载 Host Kit 2.4.13</a><p class="download-note">文件通常保存在系统的“下载”目录，文件名为 <code>aim-host-kit-2.4.13.tar.gz</code>。</p><pre><code>tar -xzf aim-host-kit-2.4.13.tar.gz
-cd aim-host-kit-2.4.13</code></pre></div></article>
+              <article><span class="step-number">01</span><div><h4>下载并解压</h4><p>先点击下面的按钮下载安装包。下载完成后，在能够 SSH 登录目标服务器的管理电脑上打开终端并执行：</p><a class="button primary guide-download" href="/downloads/aim-host-kit-2.4.14.tar.gz" download><Archive />下载 Host Kit 2.4.14</a><p class="download-note">文件通常保存在系统的“下载”目录，文件名为 <code>aim-host-kit-2.4.14.tar.gz</code>。</p><pre><code>tar -xzf aim-host-kit-2.4.14.tar.gz
+cd aim-host-kit-2.4.14</code></pre></div></article>
               <article><span class="step-number">02</span><div><h4>一键初始化目标机</h4><p>把示例地址替换为实际目标机。首次账号可以是 root，或具备 sudo 权限的运维账号：</p><pre><code>./aim-copy-id --install root@192.168.1.100</code></pre><p class="command-note">非 22 端口：<code>./aim-copy-id --install --port 2222 root@192.168.1.100</code></p></div></article>
               <article><span class="step-number">03</span><div><h4>导入专用私钥</h4><p>命令结束会打印私钥路径，默认是：</p><pre><code>~/.ssh/aim/aim_console_ed25519</code></pre><p class="command-note danger-text">不要选择 <code>aim_console_ed25519.pub</code>；带 <code>.pub</code> 的是公钥。</p></div></article>
               <article><span class="step-number">04</span><div><h4>保存并确认指纹</h4><p>下面填写目标机地址和端口，SSH 用户固定填写 <code>aimops</code>，导入上一步的私钥。保存后先核对 SSH SHA-256 指纹，再点击“重新探测”。</p></div></article>

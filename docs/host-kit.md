@@ -1,6 +1,6 @@
-# AIM Host Kit 2.4.13（部署、失败清理、断点恢复、备份、监控与 Router）
+# AIM Host Kit 2.4.14（部署、失败清理、断点恢复、备份、监控与 Router）
 
-控制台会通过 SSH 连接目标机的 `aimops` 用户。Host Kit 2.4.13 安装 MySQL 生命周期脚本、MySQL Router 脚本、受限执行器，以及失败安装清理、安全续跑、在线备份和健康监控所需的协议动作。
+控制台会通过 SSH 连接目标机的 `aimops` 用户。Host Kit 2.4.14 安装 MySQL 生命周期脚本、MySQL Router 脚本、受限执行器，以及失败安装清理、安全续跑、在线备份和健康监控所需的协议动作。
 
 ```sh
 # 解压 host kit 后，在管理电脑执行；--install 会自动在目标机执行一次 sudo 安装
@@ -14,7 +14,7 @@
 - `/var/lib/aim-staging` 以及每个任务独立的暂存目录；
 - 仅允许 `aimops` 无密码运行指定执行器的 sudo 规则。
 
-重新执行新版 Host Kit 是幂等的，不会删除 MySQL 数据。升级到控制台 1.0.34 及以上版本后，应在每台目标机重新执行一次 2.4.13。该版本会修正已解压的 Router 目录权限，避免 `mysqlrouter` 服务用户触发 `203/EXEC Permission denied`，并在 Router 端口未就绪时输出 systemd 与 journal 诊断。
+重新执行新版 Host Kit 是幂等的，不会删除 MySQL 数据。升级到控制台 1.0.37 后，应在每台目标机重新执行一次 2.4.14。该版本会在副本 root 凭据和复制通道初始化期间临时解除只读保护，并在成功或错误退出时恢复 `read_only` 与 `super_read_only`，修复首次搭建主从时报错 `ERROR 1290` 的问题。
 
 对于内存不超过 3 GiB 的测试主机，新建实例默认使用 `innodb_buffer_pool_size = 128M`。如果首次启动因主机负载过高而超时，但 MySQL 随后已经正常监听，控制台会核验 AIM 配置、版本、server_id、MGR 拓扑和保存的 root 凭据，全部一致后才继续部署；不会接管不属于 AIM 的实例，也不会覆盖用户已经修改的 Buffer Pool。
 
