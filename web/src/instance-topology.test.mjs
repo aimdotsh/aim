@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { groupInstances, managedSourceInstances } from './instance-topology.js'
+import { clusterMemberLabel, clusterReplicas, clusterSource, groupInstances, managedSourceInstances } from './instance-topology.js'
 
 const instances = [
   { id: 1, cluster_id: 10, topology_key: 'cluster:10', topology_name: 'mgr-prod', topology_type: 'mgr', host_name: 'mgr002', port: 3316, role: 'mgr', state: 'running' },
@@ -20,5 +20,14 @@ test('instances are grouped and ordered by deployment topology', () => {
 test('running managed instances can populate a replica source', () => {
   const choices = managedSourceInstances(instances, 3, 3336)
   assert.equal(choices.some(instance => instance.state === 'stopped'), false)
+  assert.deepEqual(choices.map(instance => instance.role), ['source'])
   assert.equal(choices.find(instance => instance.id === 4).source_address, '10.0.0.11')
+})
+
+test('cluster helpers expose the real replication direction', () => {
+  const cluster = { members: [instances[1], instances[3]] }
+  assert.equal(clusterSource(cluster).id, 4)
+  assert.deepEqual(clusterReplicas(cluster).map(instance => instance.id), [2])
+  assert.equal(clusterMemberLabel(instances[3], 'replication'), '主库')
+  assert.equal(clusterMemberLabel(instances[0], 'mgr'), 'MGR 成员')
 })

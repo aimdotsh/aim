@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -465,6 +466,93 @@ func TestInstanceListExposesTopologyAndPreferredSourceAddress(t *testing.T) {
 	}
 	if instance["source_address"] != "100.64.0.11" {
 		t.Fatalf("preferred source address did not use the managed business IP: %+v", instance)
+	}
+}
+
+func TestHistoricalManagedReplicaIsReconciledIntoSourceTopology(t *testing.T) {
+	store := testStore(t)
+	now := "2026-08-11T00:00:00Z"
+	sourceHost, err := store.DB.Exec(`INSERT INTO hosts(name,address,ssh_port,ssh_user,private_key_cipher,facts_json,status,created_at,updated_at) VALUES('source-host','198.51.100.20',22,'aimops','encrypted','{"ipv4":["10.17.0.20"]}','online',?,?)`, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replicaHost, err := store.DB.Exec(`INSERT INTO hosts(name,address,ssh_port,ssh_user,private_key_cipher,status,created_at,updated_at) VALUES('replica-host','198.51.100.21',22,'aimops','encrypted','online',?,?)`, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceHostID, _ := sourceHost.LastInsertId()
+	replicaHostID, _ := replicaHost.LastInsertId()
+	sourceSpec, _ := json.Marshal(DeploymentRequest{Name: "orders-primary", Mode: "source", Port: 3386, Nodes: []DeploymentNode{{HostID: sourceHostID, LocalIP: "10.17.0.20"}}})
+	replicaSpec, _ := json.Marshal(DeploymentRequest{Name: "late-replica", Mode: "replica", Port: 3386, SourceHost: "10.17.0.20", SourcePort: 3386, Nodes: []DeploymentNode{{HostID: replicaHostID}}})
+	if _, err := store.DB.Exec(`INSERT INTO instances(host_id,version,port,role,service,state,spec_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, sourceHostID, "8.0.46", 3386, "source", "aim-mysql-3386", "running", sourceSpec, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`INSERT INTO instances(host_id,version,port,role,service,state,spec_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, replicaHostID, "8.0.46", 3386, "replica", "aim-mysql-3386", "running", replicaSpec, now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	linked, err := store.reconcileReplicationTopologies(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linked != 1 {
+		t.Fatalf("expected one historical replica to be linked, got %d", linked)
+	}
+	var sourceCluster, replicaCluster int64
+	if err := store.DB.QueryRow(`SELECT cluster_id FROM instances WHERE host_id=?`, sourceHostID).Scan(&sourceCluster); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB.QueryRow(`SELECT cluster_id FROM instances WHERE host_id=?`, replicaHostID).Scan(&replicaCluster); err != nil {
+		t.Fatal(err)
+	}
+	if sourceCluster == 0 || sourceCluster != replicaCluster {
+		t.Fatalf("source and replica were not placed in one topology: %d != %d", sourceCluster, replicaCluster)
+	}
+	var name, clusterType string
+	if err := store.DB.QueryRow(`SELECT name,type FROM clusters WHERE id=?`, sourceCluster).Scan(&name, &clusterType); err != nil {
+		t.Fatal(err)
+	}
+	if name != "orders-primary" || clusterType != "replication" {
+		t.Fatalf("unexpected reconciled topology: %s %s", name, clusterType)
+	}
+	linked, err = store.reconcileReplicationTopologies(context.Background())
+	if err != nil || linked != 0 {
+		t.Fatalf("reconciliation is not idempotent: linked=%d err=%v", linked, err)
+	}
+}
+
+func TestClusterListReturnsMembersAndReplicationHealth(t *testing.T) {
+	store := testStore(t)
+	now := "2026-08-11T00:00:00Z"
+	clusterResult, _ := store.DB.Exec(`INSERT INTO clusters(name,type,group_name,state,created_at,updated_at) VALUES('orders-primary','replication','','online',?,?)`, now, now)
+	clusterID, _ := clusterResult.LastInsertId()
+	for index, role := range []string{"source", "replica"} {
+		hostResult, err := store.DB.Exec(`INSERT INTO hosts(name,address,ssh_port,ssh_user,private_key_cipher,status,created_at,updated_at) VALUES(?,?,?,?,?,'online',?,?)`, fmt.Sprintf("db%d", index+1), fmt.Sprintf("10.17.0.%d", index+20), 22, "aimops", "encrypted", now, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		hostID, _ := hostResult.LastInsertId()
+		spec, _ := json.Marshal(DeploymentRequest{Name: "orders-primary", Mode: role, Port: 3386, Nodes: []DeploymentNode{{HostID: hostID, LocalIP: fmt.Sprintf("10.17.0.%d", index+20)}}})
+		if _, err := store.DB.Exec(`INSERT INTO instances(host_id,version,port,role,service,state,cluster_id,spec_json,created_at,updated_at) VALUES(?,?,?,?,?,'running',?,?,?,?)`, hostID, "8.0.46", 3386, role, "aim-mysql-3386", clusterID, spec, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	server := &Server{Store: store}
+	response := httptest.NewRecorder()
+	server.listClusters(response, httptest.NewRequest(http.MethodGet, "/api/v1/clusters", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("cluster list failed: %d %s", response.Code, response.Body.String())
+	}
+	var clusters []map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &clusters); err != nil {
+		t.Fatal(err)
+	}
+	if len(clusters) != 1 || clusters[0]["state"] != "online" || int(clusters[0]["member_count"].(float64)) != 2 {
+		t.Fatalf("unexpected cluster summary: %+v", clusters)
+	}
+	members := clusters[0]["members"].([]any)
+	if len(members) != 2 || members[0].(map[string]any)["role"] != "source" || members[0].(map[string]any)["sql_endpoint"] != "10.17.0.20:3386" {
+		t.Fatalf("unexpected cluster members: %+v", members)
 	}
 }
 

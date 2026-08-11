@@ -866,26 +866,89 @@ func (s *Server) listClusters(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "读取集群失败")
 		return
 	}
-	defer rows.Close()
-	items := []map[string]any{}
+	type clusterRecord struct {
+		id                                  int64
+		name, clusterType, groupName, state string
+		created, updated, specJSON          string
+	}
+	records := []clusterRecord{}
 	for rows.Next() {
-		var id int64
-		var name, clusterType, groupName, state, created, updated, specJSON string
-		if rows.Scan(&id, &name, &clusterType, &groupName, &state, &created, &updated, &specJSON) == nil {
-			item := map[string]any{"id": id, "name": name, "type": clusterType, "group_name": groupName, "state": state, "created_at": created, "updated_at": updated}
-			var spec DeploymentRequest
-			if json.Unmarshal([]byte(specJSON), &spec) == nil && spec.DeployRouter {
-				item["router_enabled"] = true
-				item["router_rw_port"] = spec.RouterRWPort
-				item["router_cluster_name"] = spec.RouterClusterName
-				routerEndpoints := make([]string, 0, len(spec.Nodes))
-				for _, node := range spec.Nodes {
+		var record clusterRecord
+		if rows.Scan(&record.id, &record.name, &record.clusterType, &record.groupName, &record.state, &record.created, &record.updated, &record.specJSON) == nil {
+			records = append(records, record)
+		}
+	}
+	rows.Close()
+	items := []map[string]any{}
+	for _, record := range records {
+		memberRows, err := s.Store.DB.QueryContext(r.Context(), `SELECT i.id,i.host_id,h.name,h.address,h.facts_json,i.version,i.port,i.role,i.state,i.spec_json,i.created_at
+			FROM instances i JOIN hosts h ON h.id=i.host_id WHERE i.cluster_id=?
+			ORDER BY CASE i.role WHEN 'source' THEN 0 WHEN 'mgr' THEN 1 WHEN 'replica' THEN 2 ELSE 3 END,h.name,i.port`, record.id)
+		if err != nil {
+			writeError(w, 500, "读取集群成员失败")
+			return
+		}
+		members := []map[string]any{}
+		onlineMembers, sourceCount, replicaCount := 0, 0, 0
+		for memberRows.Next() {
+			var id, hostID int64
+			var hostName, address, factsJSON, version, role, state, specJSON, created string
+			var port int
+			if memberRows.Scan(&id, &hostID, &hostName, &address, &factsJSON, &version, &port, &role, &state, &specJSON, &created) != nil {
+				continue
+			}
+			endpointAddress := preferredInstanceAddress(address, factsJSON, specJSON, hostID)
+			member := map[string]any{
+				"id": id, "host_id": hostID, "host_name": hostName, "address": address, "source_address": endpointAddress,
+				"version": version, "port": port, "role": role, "state": state, "sql_endpoint": net.JoinHostPort(endpointAddress, strconv.Itoa(port)), "created_at": created,
+			}
+			var memberSpec DeploymentRequest
+			if json.Unmarshal([]byte(specJSON), &memberSpec) == nil {
+				member["source_instance_id"] = memberSpec.SourceInstanceID
+				if net.ParseIP(memberSpec.SourceHost) != nil && memberSpec.SourcePort > 0 {
+					member["source_endpoint"] = net.JoinHostPort(memberSpec.SourceHost, strconv.Itoa(memberSpec.SourcePort))
+				}
+				if record.clusterType == "mgr" && memberSpec.MGRPort > 0 {
+					member["mgr_endpoint"] = net.JoinHostPort(endpointAddress, strconv.Itoa(memberSpec.MGRPort))
+				}
+			}
+			if state == "running" || state == "online" {
+				onlineMembers++
+			}
+			if role == "source" {
+				sourceCount++
+			} else if role == "replica" {
+				replicaCount++
+			}
+			members = append(members, member)
+		}
+		memberRows.Close()
+		if len(members) == 0 {
+			continue
+		}
+		structurallyComplete := record.clusterType == "mgr" && len(members) >= 3 || record.clusterType == "replication" && sourceCount == 1 && replicaCount >= 1
+		state := "degraded"
+		if structurallyComplete && onlineMembers == len(members) {
+			state = "online"
+		}
+		item := map[string]any{
+			"id": record.id, "name": record.name, "type": record.clusterType, "group_name": record.groupName, "state": state,
+			"member_count": len(members), "online_members": onlineMembers, "members": members, "created_at": record.created, "updated_at": record.updated,
+		}
+		var spec DeploymentRequest
+		if json.Unmarshal([]byte(record.specJSON), &spec) == nil && spec.DeployRouter {
+			item["router_enabled"] = true
+			item["router_rw_port"] = spec.RouterRWPort
+			item["router_cluster_name"] = spec.RouterClusterName
+			routerEndpoints := make([]string, 0, len(spec.Nodes))
+			for _, node := range spec.Nodes {
+				if net.ParseIP(node.RouterIP) != nil {
 					routerEndpoints = append(routerEndpoints, net.JoinHostPort(node.RouterIP, strconv.Itoa(spec.RouterRWPort)))
 				}
-				item["router_endpoints"] = routerEndpoints
 			}
-			items = append(items, item)
+			item["router_endpoints"] = routerEndpoints
 		}
+		items = append(items, item)
 	}
 	writeJSON(w, 200, items)
 }

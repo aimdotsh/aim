@@ -37,9 +37,23 @@ export function managedSourceInstances(instances, targetHostID = 0, targetPort =
   return (instances || []).filter(instance => {
     const state = String(instance.state || '').toLowerCase()
     if (!['running', 'online'].includes(state)) return false
+    if (instance.role !== 'source') return false
     return Number(instance.host_id) !== Number(targetHostID) || Number(instance.port) !== Number(targetPort)
   }).sort((left, right) =>
     (rolePriority[left.role] ?? 9) - (rolePriority[right.role] ?? 9) ||
     String(left.host_name || '').localeCompare(String(right.host_name || ''), 'zh-CN') ||
     Number(left.port) - Number(right.port))
+}
+
+export function clusterSource(cluster) {
+  return (cluster?.members || []).find(member => member.role === 'source') || null
+}
+
+export function clusterReplicas(cluster) {
+  return (cluster?.members || []).filter(member => member.role === 'replica')
+}
+
+export function clusterMemberLabel(member, clusterType) {
+  if (clusterType === 'mgr') return 'MGR 成员'
+  return ({ source: '主库', replica: '从库' })[member?.role] || 'MySQL 实例'
 }

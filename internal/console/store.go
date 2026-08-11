@@ -145,6 +145,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(1,?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
+	if _, err := s.reconcileReplicationTopologies(ctx); err != nil {
+		return fmt.Errorf("reconcile replication topologies: %w", err)
+	}
 	// A controller restart must never blindly replay an in-flight remote mutation.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := s.DB.ExecContext(ctx, `UPDATE jobs SET state='failed', error='controller restarted before cleanup task started', completed_at=? WHERE kind='deployment_cleanup' AND state='queued'`, now); err != nil {

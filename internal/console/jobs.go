@@ -46,6 +46,7 @@ type DeploymentRequest struct {
 	ReplicaHost         string           `json:"replica_host,omitempty"`
 	SourceHost          string           `json:"source_host,omitempty"`
 	SourcePort          int              `json:"source_port,omitempty"`
+	SourceInstanceID    int64            `json:"source_instance_id,omitempty"`
 	ReplicationUser     string           `json:"replication_user,omitempty"`
 	MGRPort             int              `json:"mgr_port,omitempty"`
 	MGRGroupName        string           `json:"mgr_group_name,omitempty"`
@@ -113,6 +114,9 @@ func hasResumableAIMInstance(facts executor.HostFacts, port int) bool {
 }
 
 func (m *JobManager) CreateDeployment(ctx context.Context, user *User, remoteAddr string, input DeploymentRequest) (string, error) {
+	if err := m.resolveManagedSource(ctx, &input); err != nil {
+		return "", err
+	}
 	if err := validateDeployment(&input); err != nil {
 		return "", err
 	}
@@ -193,6 +197,39 @@ func (m *JobManager) CreateDeployment(ctx context.Context, user *User, remoteAdd
 	m.Store.Audit(ctx, user, remoteAddr, "deployment_create", "job", jobID, fmt.Sprintf(`{"mode":%q,"version":%q,"port":%d}`, input.Mode, input.Version, input.Port))
 	go m.runDeployment(jobID, input)
 	return jobID, nil
+}
+
+func (m *JobManager) resolveManagedSource(ctx context.Context, input *DeploymentRequest) error {
+	if input.Mode != "replica" || input.SourceInstanceID < 1 {
+		return nil
+	}
+	var hostID int64
+	var address, factsJSON, role, state, specJSON, clusterType string
+	var port int
+	err := m.Store.DB.QueryRowContext(ctx, `SELECT i.host_id,h.address,h.facts_json,i.port,i.role,i.state,i.spec_json,COALESCE(c.type,'')
+		FROM instances i JOIN hosts h ON h.id=i.host_id LEFT JOIN clusters c ON c.id=i.cluster_id WHERE i.id=?`, input.SourceInstanceID).
+		Scan(&hostID, &address, &factsJSON, &port, &role, &state, &specJSON, &clusterType)
+	if errors.Is(err, sql.ErrNoRows) {
+		return errors.New("选择的源库实例不存在，请重新选择")
+	}
+	if err != nil {
+		return err
+	}
+	if role != "source" || clusterType == "mgr" {
+		return errors.New("只能选择受管主库作为复制源")
+	}
+	if state != "running" && state != "online" {
+		return errors.New("选择的源库当前未运行")
+	}
+	if len(input.Nodes) == 1 && input.Nodes[0].HostID == hostID && input.Port == port {
+		return errors.New("源库与从库不能是同一个实例")
+	}
+	input.SourceHost = preferredInstanceAddress(address, factsJSON, specJSON, hostID)
+	input.SourcePort = port
+	if net.ParseIP(input.SourceHost) == nil {
+		return errors.New("受管源库没有可用的业务 IP，请改用手工填写")
+	}
+	return nil
 }
 
 func (m *JobManager) RetryDeployment(ctx context.Context, user *User, remoteAddr, previousJobID string) (string, error) {
@@ -1117,6 +1154,35 @@ func (m *JobManager) recordDeployment(ctx context.Context, deployment Deployment
 		}
 		id, _ := result.LastInsertId()
 		clusterID = id
+	}
+	if deployment.Mode == "replica" && deployment.SourceInstanceID > 0 {
+		var sourceClusterID sql.NullInt64
+		var sourceRole, sourceSpecJSON, sourceHostName string
+		var sourcePort int
+		if err := tx.QueryRowContext(ctx, `SELECT i.cluster_id,i.role,i.spec_json,h.name,i.port FROM instances i JOIN hosts h ON h.id=i.host_id WHERE i.id=?`, deployment.SourceInstanceID).
+			Scan(&sourceClusterID, &sourceRole, &sourceSpecJSON, &sourceHostName, &sourcePort); err != nil {
+			return fmt.Errorf("读取源库拓扑失败: %w", err)
+		}
+		if sourceRole != "source" {
+			return errors.New("选择的实例不是受管主库")
+		}
+		if sourceClusterID.Valid {
+			var clusterType string
+			if err := tx.QueryRowContext(ctx, `SELECT type FROM clusters WHERE id=?`, sourceClusterID.Int64).Scan(&clusterType); err != nil || clusterType != "replication" {
+				return errors.New("源库已经属于不兼容的拓扑")
+			}
+			clusterID = sourceClusterID.Int64
+		} else {
+			result, err := tx.ExecContext(ctx, `INSERT INTO clusters(name,type,group_name,state,created_at,updated_at) VALUES(?, 'replication', '', 'online', ?, ?)`, topologyDeploymentName(sourceSpecJSON, sourceHostName, sourcePort), now, now)
+			if err != nil {
+				return err
+			}
+			id, _ := result.LastInsertId()
+			clusterID = id
+			if _, err := tx.ExecContext(ctx, `UPDATE instances SET cluster_id=?,updated_at=? WHERE id=?`, id, now, deployment.SourceInstanceID); err != nil {
+				return err
+			}
+		}
 	}
 	for index, target := range targets {
 		role := deployment.Mode
