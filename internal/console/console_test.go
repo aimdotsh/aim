@@ -424,6 +424,50 @@ func TestHostListExposesDeletionAvailabilityAndReason(t *testing.T) {
 	}
 }
 
+func TestInstanceListExposesTopologyAndPreferredSourceAddress(t *testing.T) {
+	store := testStore(t)
+	if _, err := store.BootstrapAdmin(context.Background(), "admin", "very-strong-admin-password"); err != nil {
+		t.Fatal(err)
+	}
+	now := "2026-08-11T00:00:00Z"
+	hostResult, err := store.DB.Exec(`INSERT INTO hosts(name,address,ssh_port,ssh_user,private_key_cipher,status,created_at,updated_at) VALUES('mgr001','198.51.100.11',22,'aimops','encrypted','online',?,?)`, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hostID, _ := hostResult.LastInsertId()
+	clusterResult, err := store.DB.Exec(`INSERT INTO clusters(name,type,group_name,state,created_at,updated_at) VALUES('production-mgr','mgr','00000000-0000-0000-0000-000000000001','online',?,?)`, now, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clusterID, _ := clusterResult.LastInsertId()
+	spec, _ := json.Marshal(DeploymentRequest{Name: "production-mgr", Mode: "mgr", Nodes: []DeploymentNode{{HostID: hostID, LocalIP: "100.64.0.11"}}})
+	if _, err := store.DB.Exec(`INSERT INTO instances(host_id,version,port,role,service,state,cluster_id,spec_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, hostID, "8.0.46", 3316, "mgr", "aim-mysql-3316", "running", clusterID, string(spec), now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	server := &Server{Store: store}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/instances", nil)
+	response := httptest.NewRecorder()
+	server.listInstances(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("instance list failed: %d %s", response.Code, response.Body.String())
+	}
+	var instances []map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &instances); err != nil {
+		t.Fatal(err)
+	}
+	if len(instances) != 1 {
+		t.Fatalf("unexpected instance count: %d", len(instances))
+	}
+	instance := instances[0]
+	if instance["topology_key"] != "cluster:1" || instance["topology_name"] != "production-mgr" || instance["topology_type"] != "mgr" {
+		t.Fatalf("topology metadata is incomplete: %+v", instance)
+	}
+	if instance["source_address"] != "100.64.0.11" {
+		t.Fatalf("preferred source address did not use the managed business IP: %+v", instance)
+	}
+}
+
 func TestDeletionRejectsUnsafeStates(t *testing.T) {
 	store := testStore(t)
 	if _, err := store.BootstrapAdmin(context.Background(), "admin", "very-strong-admin-password"); err != nil {

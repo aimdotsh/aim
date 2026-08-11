@@ -1,10 +1,11 @@
 {
   "name": "aim-console-web",
   "private": true,
-  "version": "1.0.37",
+  "version": "1.0.38",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "test": "node --test src/*.test.mjs",
     "build": "vite build",
     "preview": "vite preview"
   },

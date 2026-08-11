@@ -223,6 +223,13 @@ td small { margin-top: 4px; color: #8894a4; }
 .row-actions button svg { width: 15px; height: 15px; }
 .row-actions button:hover { color: var(--teal-dark); border-color: #93c8c1; }
 .row-actions button.warning { color: #a76c28; }.row-actions button.danger { color: #bd4150; }
+.instance-groups { display: grid; gap: 18px; padding: 20px; background: #f5f8fa; }
+.instance-group { overflow: hidden; border: 1px solid #dbe3e9; border-radius: 9px; background: white; }
+.instance-group > header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 13px 18px; border-bottom: 1px solid #e5eaee; background: linear-gradient(90deg, #edf8f6, #f9fbfc); }
+.instance-group > header div { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.instance-group > header strong { overflow: hidden; color: #243449; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.instance-group > header > span { flex: 0 0 auto; color: #7d8a9b; font-size: 11px; }
+.topology-type { flex: 0 0 auto; padding: 4px 7px; border-radius: 5px; color: #08766e; background: #dcefeb; font-size: 10px; font-weight: 850; letter-spacing: .04em; }
 .danger-panel { display: grid; grid-template-columns: auto 1fr; gap: 18px; padding: 22px; border: 1px solid #efbdc3; border-radius: 9px; color: #77333c; background: #fff4f5; }
 .danger-panel > svg { color: var(--danger); }
 .danger-panel h3 { margin: 0 0 8px; }.danger-panel p { font-size: 13px; }.danger-panel input { max-width: 420px; border-color: #df9aa3; }.danger-panel .card-actions { margin-top: 13px; }

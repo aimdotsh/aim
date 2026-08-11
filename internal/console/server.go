@@ -780,7 +780,13 @@ func (s *Server) jobEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listInstances(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.Store.DB.QueryContext(r.Context(), `SELECT i.id,i.host_id,h.name,h.address,i.version,i.port,i.role,i.service,i.state,i.cluster_id,i.created_at,i.updated_at FROM instances i JOIN hosts h ON h.id=i.host_id ORDER BY h.name,i.port`)
+	rows, err := s.Store.DB.QueryContext(r.Context(), `SELECT i.id,i.host_id,h.name,h.address,i.version,i.port,i.role,i.service,i.state,i.cluster_id,i.spec_json,i.created_at,i.updated_at,
+        COALESCE(c.name,''),COALESCE(c.type,''),COALESCE(c.group_name,'')
+        FROM instances i
+        JOIN hosts h ON h.id=i.host_id
+        LEFT JOIN clusters c ON c.id=i.cluster_id
+        ORDER BY CASE COALESCE(c.type,i.role) WHEN 'mgr' THEN 0 WHEN 'replication' THEN 1 WHEN 'source' THEN 2 WHEN 'replica' THEN 3 ELSE 4 END,
+                 COALESCE(i.cluster_id,i.id),CASE i.role WHEN 'source' THEN 0 WHEN 'replica' THEN 1 ELSE 2 END,h.name,i.port`)
 	if err != nil {
 		writeError(w, 500, "读取实例失败")
 		return
@@ -789,11 +795,41 @@ func (s *Server) listInstances(w http.ResponseWriter, r *http.Request) {
 	items := []map[string]any{}
 	for rows.Next() {
 		var id, hostID int64
-		var name, address, version, role, service, state, created, updated string
+		var name, address, version, role, service, state, specJSON, created, updated string
+		var clusterName, clusterType, clusterGroupName string
 		var port int
 		var clusterID sql.NullInt64
-		if rows.Scan(&id, &hostID, &name, &address, &version, &port, &role, &service, &state, &clusterID, &created, &updated) == nil {
-			items = append(items, map[string]any{"id": id, "host_id": hostID, "host_name": name, "address": address, "version": version, "port": port, "role": role, "service": service, "state": state, "cluster_id": clusterID.Int64, "created_at": created, "updated_at": updated})
+		if rows.Scan(&id, &hostID, &name, &address, &version, &port, &role, &service, &state, &clusterID, &specJSON, &created, &updated, &clusterName, &clusterType, &clusterGroupName) == nil {
+			topologyKey := fmt.Sprintf("instance:%d", id)
+			topologyName := name + ":" + strconv.Itoa(port)
+			topologyType := role
+			if clusterID.Valid {
+				topologyKey = fmt.Sprintf("cluster:%d", clusterID.Int64)
+				topologyName = clusterName
+				topologyType = clusterType
+			} else {
+				var spec DeploymentRequest
+				if json.Unmarshal([]byte(specJSON), &spec) == nil && strings.TrimSpace(spec.Name) != "" {
+					topologyName = spec.Name
+				}
+			}
+			sourceAddress := address
+			var spec DeploymentRequest
+			if json.Unmarshal([]byte(specJSON), &spec) == nil {
+				for _, node := range spec.Nodes {
+					if node.HostID == hostID && net.ParseIP(node.LocalIP) != nil {
+						sourceAddress = node.LocalIP
+						break
+					}
+				}
+			}
+			items = append(items, map[string]any{
+				"id": id, "host_id": hostID, "host_name": name, "address": address, "source_address": sourceAddress,
+				"version": version, "port": port, "role": role, "service": service, "state": state,
+				"cluster_id": clusterID.Int64, "cluster_name": clusterName, "cluster_type": clusterType, "cluster_group_name": clusterGroupName,
+				"topology_key": topologyKey, "topology_name": topologyName, "topology_type": topologyType,
+				"created_at": created, "updated_at": updated,
+			})
 		}
 	}
 	writeJSON(w, 200, items)
