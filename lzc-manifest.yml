@@ -20,7 +20,7 @@ application:
 
 services:
   console:
-    image: registry.lazycat.cloud/f007/f00700f/aim-mysql-console:4c9c4126b3978094
+    image: registry.lazycat.cloud/f007/f00700f/aim-mysql-console:932f64e0e17f2fa5
     # landan 当前 lzcos 版本尚未启用 services.<name>.run_as；使用
     # LPK v2 的持久化 bind + setup_script 兼容旧版，同时镜像本身以
     # UID/GID 10001 的 aim 用户运行。

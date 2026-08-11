@@ -119,9 +119,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--teal); box-shado
 .hero-card > svg { z-index: 1; width: 84px; height: 84px; margin-right: 80px; color: #68d5c6; opacity: .85; stroke-width: 1; }
 .metric-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; }
 .metric-grid article { display: flex; align-items: center; gap: 16px; min-height: 110px; padding: 20px; border: 1px solid #dee5eb; border-radius: 9px; background: white; }
-.metric-icon { width: 48px; height: 48px; display: grid; place-items: center; border-radius: 9px; }
+.metric-grid .metric-icon { width: 48px; height: 48px; display: grid; flex: 0 0 48px; place-items: center; border-radius: 9px; }
+.metric-grid .metric-icon svg { width: 22px; height: 22px; display: block; }
 .metric-icon.blue { color: #386da8; background: #e8f1fa; }.metric-icon.teal { color: #087b71; background: #e2f4f1; }.metric-icon.violet { color: #7257a7; background: #f0ebfa; }.metric-icon.amber { color: #b46b1f; background: #fff1df; }
-.metric-grid b, .metric-grid span { display: block; }
+.metric-grid article > div { min-width: 0; }
+.metric-grid article > div > b, .metric-grid article > div > span { display: block; }
 .metric-grid b { color: var(--navy); font-size: 28px; line-height: 1; }
 .metric-grid div > span { margin-top: 7px; color: var(--muted); font-size: 12px; }
 
