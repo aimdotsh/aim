@@ -5,8 +5,8 @@ ENV GOPROXY=${GOPROXY}
 RUN apk add --no-cache ca-certificates git
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
-# internal/webui/dist is generated and verified by `npm run build` before LPK
-# packaging.  Keeping the validated assets in the build context avoids a
+# internal/webui/dist is generated and verified by `npm run build` before the
+# image build. Keeping the validated assets in the build context avoids a
 # second, network-dependent npm installation inside Docker.
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
@@ -21,8 +21,6 @@ RUN apk add --no-cache ca-certificates tzdata && \
 COPY --from=go-build /out/ /usr/share/aim/
 USER aim
 EXPOSE 8080
-# Keep the image metadata compatible with the lzcos/docker image loader used
-# by older landan boxes.  The LazyCat manifest bind below remains the actual
-# persistent storage path and overrides this image-declared volume.
+# Persist the SQLite database, uploaded media and online backup repository.
 VOLUME ["/var/lib/aim-console"]
 ENTRYPOINT ["/usr/share/aim/aim-console"]

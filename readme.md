@@ -2,6 +2,8 @@
 
 `aim.sh` 使用 Oracle MySQL Community Server 官方通用二进制包，在一台 Linux 主机上安装相互隔离的 MySQL 实例。支持单机、主库、GTID 从库，以及 MySQL 8.0 单主模式 MGR。
 
+本 `aim` 分支是普通自托管版本，只依赖 Docker、Linux 和 SSH，不包含任何特定应用平台的认证、文件选择器、存储路径、打包清单或运行时接口。
+
 ![aim.sh Linux 环境下 MySQL 自动化安装与集群部署架构总览](docs/images/aim-overview.png)
 
 ## Web 控制台
@@ -14,7 +16,7 @@ AIM 现在同时提供内网 Web 部署控制台。控制台以 Go 单体应用�
 - 将部署向导中的拓扑、端口、网络和安装介质配置导出为不含明文密码的目标机 Bash 脚本，支持预览、复制和下载。
 - 查看实时任务日志，管理实例启停、重新初始化和卸载。
 - 使用本地 RBAC、SSH 指纹固定、AES-256-GCM 密码保险箱和审计日志。
-- 创建手动或 Cron 定时在线备份，备份文件通过 SFTP 下载到当前懒猫用户的私有文稿，并校验 SHA-256。
+- 创建手动或 Cron 定时在线备份，备份文件通过 SFTP 下载到控制台持久化备份目录，并校验 SHA-256。
 - 按实例采集主机 CPU、内存、磁盘、负载和 MySQL 连接数、查询量、慢查询、流量、连接异常及复制状态。
 
 备份和健康监控使用协议版本 1 的新版 `aim-executor`。升级控制台后，请在每台纳管主机重新运行新版 host kit（不会删除 MySQL 数据），否则旧执行器只认识安装/启停动作，页面上的备份和监控会提示“不支持的 action”。
@@ -22,6 +24,8 @@ AIM 现在同时提供内网 Web 部署控制台。控制台以 Go 单体应用�
 快速启动控制台：
 
 ```bash
+git clone --branch aim --single-branch https://github.com/aimdotsh/aim.git
+cd aim
 cp .env.sample .env
 mkdir -p secrets
 openssl rand -base64 32 > secrets/aim_master_key
@@ -44,7 +48,7 @@ Web 控制台是可选功能；只使用命令行时仍然只需下载一个 `ai
 
 - `aim.sh`：单机、主库、从库、一主一从和三节点 MGR 安装，以及启动、停止、状态检查、重新初始化和卸载。
 - `router.sh`：MGR 完成后的 InnoDB Cluster 接管和 MySQL Router 部署。导出的 MGR+Router 脚本提供独立的 `install`、`router` 两个阶段。
-- `aim-executor` 与 Web 控制台：在线备份、Cron 调度、备份保留、懒猫网盘归档、监控历史、SSH 指纹、权限和审计。这些能力不会被导出为一次性脚本。
+- `aim-executor` 与 Web 控制台：在线备份、Cron 调度、备份保留、持久化归档、监控历史、SSH 指纹、权限和审计。这些能力不会被导出为一次性脚本。
 
 目标机需先安装 Host Kit 2.4.14。单节点示例：
 
@@ -63,10 +67,10 @@ MGR+Router 必须先按节点 1、2、3 顺序完成 `install`，确认三节点
 
 ## 在线备份与健康监控
 
-安装完成的实例会出现在“备份中心”和“健康监控”页面。备份使用目标机上的受限 `aim-executor` 调用对应版本的 `mysqldump`，采用 `--single-transaction`、`--quick`、`--routines`、`--events` 和 `--triggers`，在目标机临时目录中流式生成 gzip 文件，控制台下载后再次计算 SHA-256 并写入当前懒猫账号的私有文稿：
+安装完成的实例会出现在“备份中心”和“健康监控”页面。备份使用目标机上的受限 `aim-executor` 调用对应版本的 `mysqldump`，采用 `--single-transaction`、`--quick`、`--routines`、`--events` 和 `--triggers`，在目标机临时目录中流式生成 gzip 文件，控制台下载后再次计算 SHA-256 并写入持久化备份目录：
 
 ```text
-文稿/MySQL备份/<计划名>/<年>/<月>/
+/var/lib/aim-console/backups/<用户名>/<计划名>/<年>/<月>/
 ```
 
 备份计划支持五段 Cron 表达式、全部数据库或指定数据库、保留天数和保留份数。删除计划不会立即删除历史备份；历史文件按照保留策略清理。目标主机不需要开放新的 HTTP 端口，控制台只使用已经固定指纹的 `aimops` SSH 连接。

@@ -34,17 +34,17 @@ type BackupPlanInput struct {
 }
 
 type BackupManager struct {
-	Store        *Store
-	Secrets      *SecretBox
-	SSH          *SSHManager
-	DocumentRoot string
-	mu           sync.Mutex
-	running      map[string]context.CancelFunc
-	scheduler    *cron.Cron
+	Store      *Store
+	Secrets    *SecretBox
+	SSH        *SSHManager
+	BackupRoot string
+	mu         sync.Mutex
+	running    map[string]context.CancelFunc
+	scheduler  *cron.Cron
 }
 
-func NewBackupManager(store *Store, secrets *SecretBox, ssh *SSHManager, documentRoot string) *BackupManager {
-	return &BackupManager{Store: store, Secrets: secrets, SSH: ssh, DocumentRoot: documentRoot, running: map[string]context.CancelFunc{}}
+func NewBackupManager(store *Store, secrets *SecretBox, ssh *SSHManager, backupRoot string) *BackupManager {
+	return &BackupManager{Store: store, Secrets: secrets, SSH: ssh, BackupRoot: backupRoot, running: map[string]context.CancelFunc{}}
 }
 
 func (m *BackupManager) StartScheduler() error {
@@ -295,7 +295,7 @@ func (m *BackupManager) execute(ctx context.Context, runID string, plan BackupPl
 	ownerDir := backupPathSegment(actor.Username)
 	planDir := backupPathSegment(plan.Name)
 	now := time.Now().UTC()
-	destinationDir := filepath.Join(m.DocumentRoot, ownerDir, "MySQL备份", planDir, now.Format("2006"), now.Format("01"))
+	destinationDir := filepath.Join(m.BackupRoot, ownerDir, planDir, now.Format("2006"), now.Format("01"))
 	fileName := fmt.Sprintf("%s_%s_%s.sql.gz", planDir, now.Format("20060102_150405"), runID[:8])
 	localPath := filepath.Join(destinationDir, fileName)
 	if err := m.SSH.DownloadStagedFile(ctx, host, key, runID, result.RemotePath, localPath, result.Size, nil); err != nil {
@@ -539,7 +539,7 @@ func (m *BackupManager) applyRetention(plan BackupPlan) {
 		started, _ := time.Parse(time.RFC3339Nano, run.StartedAt)
 		deleteByCount := plan.RetentionCount > 0 && index >= plan.RetentionCount
 		deleteByAge := plan.RetentionDays > 0 && !started.IsZero() && started.Before(cutoff)
-		if !deleteByCount && !deleteByAge || !m.safeDocumentPath(run.FilePath) {
+		if !deleteByCount && !deleteByAge || !m.safeBackupPath(run.FilePath) {
 			continue
 		}
 		_ = os.Remove(run.FilePath)
@@ -548,8 +548,8 @@ func (m *BackupManager) applyRetention(plan BackupPlan) {
 	}
 }
 
-func (m *BackupManager) safeDocumentPath(path string) bool {
-	root, err := filepath.Abs(m.DocumentRoot)
+func (m *BackupManager) safeBackupPath(path string) bool {
+	root, err := filepath.Abs(m.BackupRoot)
 	if err != nil {
 		return false
 	}

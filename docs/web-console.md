@@ -17,7 +17,7 @@ AIM Web 控制台是单实例内网运维平台：
 - 只以参数数组调用 root-owned `aim.sh`，不使用 shell 拼接命令。
 - 通过环境变量传递 MySQL 密码，启用 `--no-print-secrets`，并对远程输出再次脱敏。
 
-部署向导也可以导出一个不含明文密码的 Bash 包装脚本。该脚本在目标机调用 Host Kit 安装的 `/opt/aim/aim.sh`；启用 Router 时另提供 `router` 阶段调用 `/opt/aim/router.sh`。密码只在目标机静默输入，不会写入浏览器预览、下载文件、Shell 历史或命令行参数。备份、调度、监控历史、网盘归档和审计仍需 Web 控制台与 `aim-executor`。
+部署向导也可以导出一个不含明文密码的 Bash 包装脚本。该脚本在目标机调用 Host Kit 安装的 `/opt/aim/aim.sh`；启用 Router 时另提供 `router` 阶段调用 `/opt/aim/router.sh`。密码只在目标机静默输入，不会写入浏览器预览、下载文件、Shell 历史或命令行参数。备份、调度、监控历史、持久化归档和审计仍需 Web 控制台与 `aim-executor`。
 
 控制台将 MySQL 密码和 SSH 私钥使用 AES-256-GCM 加密后写入 SQLite。主密钥不存在数据库中，由 Docker secret 单独挂载。
 
@@ -26,7 +26,7 @@ AIM Web 控制台是单实例内网运维平台：
 要求：Docker Engine 24+ 与 Docker Compose v2。
 
 ```bash
-git clone https://github.com/aimdotsh/aim.git
+git clone --branch aim --single-branch https://github.com/aimdotsh/aim.git
 cd aim
 cp .env.sample .env
 mkdir -p secrets
@@ -130,10 +130,10 @@ MGR 会自动生成组 UUID、三节点 seeds，以及默认只包含三个成�
 
 ## 在线备份与健康监控
 
-部署成功的实例会出现在“备份中心”和“健康监控”。创建备份计划时选择实例、五段 Cron 表达式、全库或指定数据库以及保留天数/份数；“立即备份”会在目标机使用对应版本的 `mysqldump`（找不到时回退 `mariadb-dump`），通过 Unix socket 以 `--single-transaction --quick` 流式生成 gzip，再经 SFTP 下载到懒猫私有文稿：
+部署成功的实例会出现在“备份中心”和“健康监控”。创建备份计划时选择实例、五段 Cron 表达式、全库或指定数据库以及保留天数/份数；“立即备份”会在目标机使用对应版本的 `mysqldump`（找不到时回退 `mariadb-dump`），通过 Unix socket 以 `--single-transaction --quick` 流式生成 gzip，再经 SFTP 下载到控制台持久化备份目录：
 
 ```text
-文稿/MySQL备份/<计划名>/<年>/<月>/<计划名>_<时间>_<任务ID>.sql.gz
+/var/lib/aim-console/backups/<用户名>/<计划名>/<年>/<月>/<计划名>_<时间>_<任务ID>.sql.gz
 ```
 
 下载完成后控制台重新计算 SHA-256，校验失败会删除本地文件并将任务标记为失败；成功任务旁可直接下载。健康监控为按需采集，不安装常驻 Agent，会读取主机 CPU、Load、内存、Swap、磁盘可用空间和 MySQL 连接、查询、慢查询、流量、表锁等待、InnoDB 缓冲池、复制 IO/SQL 与延迟。每次采集结果写入 SQLite，单实例保留最近 240 条。

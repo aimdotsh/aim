@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,28 +20,22 @@ import (
 )
 
 type ServerConfig struct {
-	CookieSecure     bool
-	DisableLocalAuth bool
-	OIDC             *OIDCConfig
-	FilePickerOrigin string
-	UploadRoot       string
-	MediaRoot        string
-	MaxUpload        int64
-	DocumentRoot     string
+	CookieSecure bool
+	UploadRoot   string
+	MediaRoot    string
+	MaxUpload    int64
+	BackupRoot   string
 }
 
 type Server struct {
-	Store            *Store
-	Secrets          *SecretBox
-	Auth             *Auth
-	OIDC             *OIDCAuth
-	LocalAuth        bool
-	Uploads          *UploadManager
-	SSH              *SSHManager
-	Jobs             *JobManager
-	Backups          *BackupManager
-	FilePickerOrigin string
-	Handler          http.Handler
+	Store   *Store
+	Secrets *SecretBox
+	Auth    *Auth
+	Uploads *UploadManager
+	SSH     *SSHManager
+	Jobs    *JobManager
+	Backups *BackupManager
+	Handler http.Handler
 }
 
 func NewServer(store *Store, secrets *SecretBox, config ServerConfig) (*Server, error) {
@@ -50,23 +43,11 @@ func NewServer(store *Store, secrets *SecretBox, config ServerConfig) (*Server, 
 	sshManager := &SSHManager{Store: store, Secrets: secrets, ConnectTimeout: 10 * time.Second, RemoteStagingRoot: "/var/lib/aim-staging"}
 	server := &Server{
 		Store: store, Secrets: secrets, Auth: auth,
-		LocalAuth:        !config.DisableLocalAuth,
-		Uploads:          &UploadManager{Store: store, Root: config.UploadRoot, MediaRoot: config.MediaRoot, MaxSize: config.MaxUpload},
-		SSH:              sshManager,
-		FilePickerOrigin: normalizeFilePickerOrigin(config.FilePickerOrigin),
-	}
-	if config.OIDC != nil {
-		oidcAuth, err := NewOIDCAuth(context.Background(), auth, *config.OIDC)
-		if err != nil {
-			return nil, err
-		}
-		server.OIDC = oidcAuth
-	}
-	if !server.LocalAuth && server.OIDC == nil {
-		return nil, errors.New("at least one authentication method must be enabled")
+		Uploads: &UploadManager{Store: store, Root: config.UploadRoot, MediaRoot: config.MediaRoot, MaxSize: config.MaxUpload},
+		SSH:     sshManager,
 	}
 	server.Jobs = &JobManager{Store: store, Secrets: secrets, SSH: sshManager}
-	server.Backups = NewBackupManager(store, secrets, sshManager, config.DocumentRoot)
+	server.Backups = NewBackupManager(store, secrets, sshManager, config.BackupRoot)
 	server.Handler = server.routes()
 	return server, nil
 }
@@ -76,16 +57,7 @@ func (s *Server) routes() http.Handler {
 	root.HandleFunc("GET /api/v1/health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	root.HandleFunc("GET /api/v1/auth/config", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]bool{"local_enabled": s.LocalAuth, "oidc_enabled": s.OIDC != nil})
-	})
-	if s.LocalAuth {
-		root.HandleFunc("POST /api/v1/session", s.Auth.Login)
-	}
-	if s.OIDC != nil {
-		root.HandleFunc("GET /api/v1/oidc/login", s.OIDC.Login)
-		root.HandleFunc("GET /api/v1/oidc/callback", s.OIDC.Callback)
-	}
+	root.HandleFunc("POST /api/v1/session", s.Auth.Login)
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/v1/session", s.Auth.Current)
@@ -131,23 +103,11 @@ func (s *Server) routes() http.Handler {
 	api.Handle("POST /api/v1/secrets/{id}/reveal", RequireRole("admin")(http.HandlerFunc(s.revealSecret)))
 	root.Handle("/api/v1/", s.Auth.Middleware(api))
 	root.Handle("/", staticHandler())
-	return securityHeaders(root, s.FilePickerOrigin)
+	return securityHeaders(root)
 }
 
-func normalizeFilePickerOrigin(raw string) string {
-	origin, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || origin.Scheme != "https" || origin.Host == "" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
-		return ""
-	}
-	return origin.Scheme + "://" + origin.Host
-}
-
-func securityHeaders(next http.Handler, filePickerOrigin string) http.Handler {
-	frameSources := "'self'"
-	if filePickerOrigin != "" {
-		frameSources += " " + filePickerOrigin
-	}
-	policy := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src " + frameSources + "; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+func securityHeaders(next http.Handler) http.Handler {
+	policy := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			w.Header().Set("Cache-Control", "no-store")
@@ -1021,7 +981,7 @@ func (s *Server) cancelBackupRun(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request) {
 	run, err := s.Backups.LoadRun(r.Context(), UserFromContext(r.Context()), r.PathValue("id"))
-	if err != nil || run.Status != "success" || !s.Backups.safeDocumentPath(run.FilePath) {
+	if err != nil || run.Status != "success" || !s.Backups.safeBackupPath(run.FilePath) {
 		writeError(w, http.StatusNotFound, "备份文件不存在")
 		return
 	}

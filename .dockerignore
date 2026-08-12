@@ -11,5 +11,4 @@ web/node_modules
 dist
 !internal/webui/dist/
 !internal/webui/dist/**
-.lzc-cli-cache*
-.lzc-cli-build*
+.l*-cli-*

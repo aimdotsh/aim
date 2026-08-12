@@ -2,11 +2,9 @@ package console
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -40,7 +38,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT NOT NULL UNIQUE,
             password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','operator','viewer')),
-            active INTEGER NOT NULL DEFAULT 1, oidc_subject TEXT, auth_provider TEXT NOT NULL DEFAULT 'local',
+            active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         )`,
 		`CREATE TABLE IF NOT EXISTS sessions (
@@ -136,12 +134,6 @@ func (s *Store) migrate(ctx context.Context) error {
 			return fmt.Errorf("migration failed: %w", err)
 		}
 	}
-	if err := s.ensureUserOIDCColumns(ctx); err != nil {
-		return err
-	}
-	if _, err := s.DB.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_oidc_subject ON users(oidc_subject) WHERE oidc_subject IS NOT NULL`); err != nil {
-		return err
-	}
 	if _, err := s.DB.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES(1,?)`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
@@ -191,89 +183,6 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	_, err := s.DB.ExecContext(ctx, `DELETE FROM host_locks`)
 	return err
-}
-
-func (s *Store) ensureUserOIDCColumns(ctx context.Context) error {
-	rows, err := s.DB.QueryContext(ctx, `PRAGMA table_info(users)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	columns := map[string]bool{}
-	for rows.Next() {
-		var cid, notNull, primaryKey int
-		var name, columnType string
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
-			return err
-		}
-		columns[name] = true
-	}
-	if !columns["oidc_subject"] {
-		if _, err := s.DB.ExecContext(ctx, `ALTER TABLE users ADD COLUMN oidc_subject TEXT`); err != nil {
-			return err
-		}
-	}
-	if !columns["auth_provider"] {
-		if _, err := s.DB.ExecContext(ctx, `ALTER TABLE users ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'local'`); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Store) UpsertOIDCUser(ctx context.Context, subject, preferredUsername, role string) (*User, error) {
-	if strings.TrimSpace(subject) == "" {
-		return nil, errors.New("OIDC subject is required")
-	}
-	if role != "admin" && role != "operator" && role != "viewer" {
-		return nil, errors.New("invalid OIDC role")
-	}
-	var user User
-	var active int
-	err := s.DB.QueryRowContext(ctx, `SELECT id,username,role,active FROM users WHERE oidc_subject=?`, subject).
-		Scan(&user.ID, &user.Username, &user.Role, &active)
-	if err == nil {
-		now := time.Now().UTC().Format(time.RFC3339Nano)
-		if _, err := s.DB.ExecContext(ctx, `UPDATE users SET role=?,active=1,updated_at=? WHERE id=?`, role, now, user.ID); err != nil {
-			return nil, err
-		}
-		user.Role, user.Active = role, true
-		return &user, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	username := sanitizeOIDCUsername(preferredUsername)
-	var exists int
-	if s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM users WHERE username=?`, username).Scan(&exists) != nil || exists > 0 {
-		digest := fmt.Sprintf("%x", sha256.Sum256([]byte(subject)))
-		username += "-" + digest[:8]
-	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	result, err := s.DB.ExecContext(ctx, `INSERT INTO users(username,password_hash,role,active,oidc_subject,auth_provider,created_at,updated_at) VALUES(?, '!oidc', ?, 1, ?, 'oidc', ?, ?)`, username, role, subject, now, now)
-	if err != nil {
-		return nil, err
-	}
-	id, err := result.LastInsertId()
-	if err != nil {
-		return nil, err
-	}
-	return &User{ID: id, Username: username, Role: role, Active: true}, nil
-}
-
-func sanitizeOIDCUsername(value string) string {
-	value = strings.TrimSpace(value)
-	var result strings.Builder
-	for _, r := range value {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("._-@", r) {
-			result.WriteRune(r)
-		}
-	}
-	if result.Len() == 0 {
-		return "lazycat-user"
-	}
-	return result.String()
 }
 
 func (s *Store) BootstrapAdmin(ctx context.Context, username, password string) (bool, error) {

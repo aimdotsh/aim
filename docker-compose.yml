@@ -11,6 +11,7 @@ services:
     environment:
       AIM_LISTEN: ":8080"
       AIM_DATA_DIR: "/var/lib/aim-console"
+      AIM_BACKUP_ROOT: "/var/lib/aim-console/backups"
       AIM_MASTER_KEY_FILE: "/run/secrets/aim_master_key"
       AIM_COOKIE_SECURE: "true"
     secrets:

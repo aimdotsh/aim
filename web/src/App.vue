@@ -12,7 +12,6 @@ import packageMetadata from '../package.json'
 const appVersion = packageMetadata.version
 
 const user = ref(null)
-const authConfig = ref({ local_enabled: true, oidc_enabled: false })
 const page = ref('dashboard')
 const loading = ref(true)
 const busy = ref(false)
@@ -149,7 +148,6 @@ async function run(action) {
 }
 
 async function restoreSession() {
-	try { authConfig.value = await api('/auth/config') } catch (_) { /* keep local fallback */ }
   try {
     const session = await api('/session')
     user.value = session.user
@@ -168,10 +166,6 @@ async function login() {
     loginForm.password = ''
     await refreshAll()
   }).catch(() => {})
-}
-
-function loginWithLazyCat() {
-  window.location.assign('/api/v1/oidc/login')
 }
 
 async function logout() {
@@ -653,23 +647,20 @@ onMounted(restoreSession)
       <div class="brand-mark light">aim<span>.sh</span></div>
       <p class="eyebrow">MYSQL LIFECYCLE CONTROL PLANE</p>
       <h1>让 MySQL 运维形成<br><em>可验证的管理闭环</em></h1>
-      <p class="story-copy">支持 MySQL 5.6 / 5.7 / 8.0 / 8.4；从系统探测、安装包校验和单机、主从、三节点 MGR + MySQL Router 高可用入口部署，到在线备份、懒猫网盘归档与健康监控，在一处完成编排、审计和生命周期管理。</p>
+      <p class="story-copy">支持 MySQL 5.6 / 5.7 / 8.0 / 8.4；从系统探测、安装包校验和单机、主从、三节点 MGR + MySQL Router 高可用入口部署，到在线备份、本地归档与健康监控，在一处完成编排、审计和生命周期管理。</p>
       <div class="story-grid">
         <div><ShieldCheck /><strong>安全部署</strong><span>固定 SSH 指纹、最小 sudo 权限与部署前校验</span></div>
-        <div><Archive /><strong>在线备份</strong><span>一致性转储、SHA-256 校验与懒猫网盘归档</span></div>
+        <div><Archive /><strong>在线备份</strong><span>一致性转储、SHA-256 校验与持久化归档</span></div>
         <div><Activity /><strong>健康监控</strong><span>CPU、内存、磁盘、连接数与复制状态</span></div>
       </div>
     </section>
     <section class="login-panel">
       <form class="login-card" @submit.prevent="login">
-        <p class="eyebrow">AIM CONSOLE</p><h2>登录内网控制台</h2><p>{{ authConfig.oidc_enabled ? '使用懒猫微服账号安全登录。' : '使用管理员分配的本地账号继续。' }}</p>
-        <button v-if="authConfig.oidc_enabled" type="button" class="button primary wide" @click="loginWithLazyCat"><ShieldCheck /><span>使用懒猫账号登录</span><ChevronRight /></button>
-        <template v-if="authConfig.local_enabled">
-          <label>用户名<input v-model.trim="loginForm.username" autocomplete="username" required autofocus></label>
-          <label>密码<input v-model="loginForm.password" type="password" autocomplete="current-password" required></label>
-        </template>
+        <p class="eyebrow">AIM CONSOLE</p><h2>登录内网控制台</h2><p>使用管理员分配的本地账号继续。</p>
+        <label>用户名<input v-model.trim="loginForm.username" autocomplete="username" required autofocus></label>
+        <label>密码<input v-model="loginForm.password" type="password" autocomplete="current-password" required></label>
         <div v-if="error" class="alert danger"><TriangleAlert />{{ error }}</div>
-        <button v-if="authConfig.local_enabled" class="button secondary wide" :disabled="busy"><span>{{ busy ? '正在验证…' : '本地账号登录' }}</span><ChevronRight /></button>
+        <button class="button primary wide" :disabled="busy"><span>{{ busy ? '正在验证…' : '登录控制台' }}</span><ChevronRight /></button>
       </form>
     </section>
   </main>
@@ -727,7 +718,7 @@ cd aim-host-kit-2.4.14</code></pre></div></article>
       </div>
 
       <div v-else-if="page === 'media'" class="page-stack">
-        <section v-if="canOperate" class="upload-zone"><Archive /><div><h3>上传 MySQL Generic 安装包</h3><p>支持从本机或懒猫网盘选择 .tar.xz、.tar.gz、.tgz 和 .tar，最大 2 GiB；自动分块续传并计算 SHA-256。</p></div><label class="button primary"><HardDriveUpload />选择软件包<input type="file" accept=".xz,.gz,.tgz,.tar" hidden @change="uploadMedia"></label><progress v-if="uploadProgress" :value="uploadProgress" max="100">{{ uploadProgress }}%</progress></section>
+        <section v-if="canOperate" class="upload-zone"><Archive /><div><h3>上传 MySQL Generic 安装包</h3><p>支持从本机选择 .tar.xz、.tar.gz、.tgz 和 .tar，最大 2 GiB；自动分块续传并计算 SHA-256。</p></div><label class="button primary"><HardDriveUpload />选择软件包<input type="file" accept=".xz,.gz,.tgz,.tar" hidden @change="uploadMedia"></label><progress v-if="uploadProgress" :value="uploadProgress" max="100">{{ uploadProgress }}%</progress></section>
         <section class="panel"><div class="panel-head"><div><p class="eyebrow">PACKAGE LIBRARY</p><h3>安装介质库</h3></div></div><div class="table-wrap"><table><thead><tr><th>文件名</th><th>版本</th><th>glibc / 架构</th><th>大小</th><th>SHA-256</th></tr></thead><tbody><tr v-for="item in media" :key="item.id"><td><strong>{{ item.filename }}</strong><small v-if="item.minimal">minimal</small></td><td>{{ item.version }}</td><td>{{ item.glibc }} / {{ item.architecture }}</td><td>{{ formatBytes(item.size) }}</td><td class="mono digest">{{ item.sha256 }}</td></tr><tr v-if="!media.length"><td colspan="5" class="empty">暂无安装介质，也可以在部署时选择由目标机官方下载。</td></tr></tbody></table></div></section>
       </div>
 
@@ -743,7 +734,7 @@ cd aim-host-kit-2.4.14</code></pre></div></article>
             <div class="wizard-footer"><div><ShieldCheck /><p><strong>提交后不会立即盲目安装</strong><span>控制台会先验证主机、端口、glibc、架构和安装包。</span></p></div><div class="wizard-actions"><button type="button" class="button secondary large" :disabled="busy || !hosts.length" @click="generateDeploymentScript"><TerminalSquare />生成执行脚本</button><button class="button primary large" :disabled="busy || !hosts.length"><Play />创建部署任务</button></div></div>
           </form>
         </section>
-        <section v-if="generatedScript" class="panel script-export-panel"><div class="panel-head"><div><p class="eyebrow">PORTABLE AIM.SH WRAPPER</p><h3>可复制的目标机执行脚本</h3></div><span class="safety-badge"><ShieldCheck />不含明文密码</span></div><div class="script-export-body"><div class="script-scope"><strong>能力边界</strong><p>脚本覆盖单机、主库、从库、一主一从、三节点 MGR 和可选 MySQL Router。备份计划、懒猫网盘归档、监控历史与审计仍由 Web 控制台和受限执行器管理，不导出为一次性 aim.sh 命令。</p></div><ol><li v-for="instruction in generatedScript.instructions" :key="instruction">{{ instruction }}</li></ol><textarea :value="generatedScript.content" readonly rows="22" spellcheck="false"></textarea><div class="script-export-actions"><span><code>{{ generatedScript.filename }}</code> · 配置变化后请重新生成</span><button type="button" class="button secondary" @click="copyDeploymentScript"><Copy />复制脚本</button><button type="button" class="button primary" @click="downloadDeploymentScript"><Download />下载 .sh</button></div></div></section>
+        <section v-if="generatedScript" class="panel script-export-panel"><div class="panel-head"><div><p class="eyebrow">PORTABLE AIM.SH WRAPPER</p><h3>可复制的目标机执行脚本</h3></div><span class="safety-badge"><ShieldCheck />不含明文密码</span></div><div class="script-export-body"><div class="script-scope"><strong>能力边界</strong><p>脚本覆盖单机、主库、从库、一主一从、三节点 MGR 和可选 MySQL Router。备份计划、持久化归档、监控历史与审计仍由 Web 控制台和受限执行器管理，不导出为一次性 aim.sh 命令。</p></div><ol><li v-for="instruction in generatedScript.instructions" :key="instruction">{{ instruction }}</li></ol><textarea :value="generatedScript.content" readonly rows="22" spellcheck="false"></textarea><div class="script-export-actions"><span><code>{{ generatedScript.filename }}</code> · 配置变化后请重新生成</span><button type="button" class="button secondary" @click="copyDeploymentScript"><Copy />复制脚本</button><button type="button" class="button primary" @click="downloadDeploymentScript"><Download />下载 .sh</button></div></div></section>
       </div>
 
       <div v-else-if="page === 'instances'" class="page-stack"><section class="panel"><div class="panel-head"><div><p class="eyebrow">INSTANCE LIFECYCLE</p><h3>MySQL 实例</h3></div><span v-if="instances.length" class="safety-badge"><Network />按部署拓扑分组 · {{ instanceGroups.length }} 组</span></div><div v-if="instances.length" class="instance-groups"><section v-for="group in instanceGroups" :key="group.key" class="instance-group"><header><div><span class="topology-type">{{ topologyTypeLabel(group.type) }}</span><strong>{{ group.name }}</strong></div><span>{{ group.instances.length }} 个实例</span></header><div class="table-wrap"><table><thead><tr><th>主机</th><th>实例</th><th>角色</th><th>状态</th><th>操作</th></tr></thead><tbody><tr v-for="instance in group.instances" :key="instance.id"><td><strong>{{ instance.host_name }}</strong><small>{{ instance.address }}</small></td><td><span class="mono">{{ instance.version }} :{{ instance.port }}</span></td><td>{{ instance.role }}</td><td><span class="status" :class="statusClass(instance.state)">{{ instance.state }}</span></td><td><div v-if="canOperate" class="row-actions"><button title="启动" @click="instanceAction(instance,'start')"><Play /></button><button title="停止" @click="instanceAction(instance,'stop')"><Square /></button><button title="状态检查" @click="instanceAction(instance,'status')"><Activity /></button><button v-if="isAdmin" class="warning" title="重新初始化" @click="previewDestructive(instance,'reinitialize')"><RefreshCw /></button><button v-if="isAdmin" class="danger" title="卸载" @click="previewDestructive(instance,'uninstall')"><Trash2 /></button></div></td></tr></tbody></table></div></section></div><div v-else class="empty">暂无由控制台管理的实例</div></section>

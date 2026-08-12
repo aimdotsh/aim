@@ -722,48 +722,12 @@ func TestHostDeletionRequiresFailedDeploymentResolution(t *testing.T) {
 	}
 }
 
-func TestOIDCUserProvisioningAndRoleSync(t *testing.T) {
-	store := testStore(t)
-	if _, err := store.BootstrapAdmin(context.Background(), "existing", "very-strong-admin-password"); err != nil {
-		t.Fatal(err)
-	}
-	user, err := store.UpsertOIDCUser(context.Background(), "lazycat-subject-1", "existing", "viewer")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if user.Username == "existing" || user.Role != "viewer" || !user.Active {
-		t.Fatalf("unexpected provisioned OIDC user: %+v", user)
-	}
-	updated, err := store.UpsertOIDCUser(context.Background(), "lazycat-subject-1", "ignored-new-name", "admin")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated.ID != user.ID || updated.Username != user.Username || updated.Role != "admin" {
-		t.Fatalf("OIDC user was not stably updated: %+v", updated)
-	}
-	var provider, subject string
-	if err := store.DB.QueryRow(`SELECT auth_provider,oidc_subject FROM users WHERE id=?`, user.ID).Scan(&provider, &subject); err != nil {
-		t.Fatal(err)
-	}
-	if provider != "oidc" || subject != "lazycat-subject-1" {
-		t.Fatalf("unexpected OIDC identity: provider=%q subject=%q", provider, subject)
-	}
-}
-
-func TestFilePickerContentSecurityPolicy(t *testing.T) {
-	if got := normalizeFilePickerOrigin("https://file.landan.heiyu.space"); got != "https://file.landan.heiyu.space" {
-		t.Fatalf("unexpected normalized picker origin: %q", got)
-	}
-	for _, invalid := range []string{"http://file.landan.heiyu.space", "https://file.landan.heiyu.space/path", "https://file.landan.heiyu.space; frame-src *"} {
-		if got := normalizeFilePickerOrigin(invalid); got != "" {
-			t.Fatalf("unsafe picker origin was accepted: %q", got)
-		}
-	}
-	handler := securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }), "https://file.landan.heiyu.space")
+func TestContentSecurityPolicyDoesNotAllowExternalFrames(t *testing.T) {
+	handler := securityHeaders(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
 	policy := response.Header().Get("Content-Security-Policy")
-	for _, expected := range []string{"style-src 'self' 'unsafe-inline'", "frame-src 'self' https://file.landan.heiyu.space"} {
+	for _, expected := range []string{"style-src 'self' 'unsafe-inline'", "frame-src 'self';"} {
 		if !strings.Contains(policy, expected) {
 			t.Fatalf("CSP is missing %q: %s", expected, policy)
 		}
