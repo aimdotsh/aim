@@ -1,362 +1,386 @@
-# aim.sh
+# aim.sh MySQL 控制台
 
-`aim.sh` 使用 Oracle MySQL Community Server 官方通用二进制包，在一台 Linux 主机上安装相互隔离的 MySQL 实例。支持单机、主库、GTID 从库，以及 MySQL 8.0 单主模式 MGR。
+aim.sh 是一个面向自托管环境的 MySQL 生命周期管理平台。它把主机纳管、安装介质管理、数据库部署、在线备份、健康监控、拓扑展示和审计集中到一个 Web 控制台，同时保留可独立运行的 `aim.sh` 命令行工具。
 
-本 `aim` 分支是普通自托管版本，只依赖 Docker、Linux 和 SSH，不包含任何特定应用平台的认证、文件选择器、存储路径、打包清单或运行时接口。
+本 `aim` 分支只依赖 Docker、Linux 和 SSH，不绑定任何特定应用平台。
 
 ![aim.sh Linux 环境下 MySQL 自动化安装与集群部署架构总览](docs/images/aim-overview.png)
 
-## Web 控制台
+## 主要功能
 
-AIM 现在同时提供内网 Web 部署控制台。控制台以 Go 单体应用、Vue 3 和 SQLite 实现，通过 SSH 调用目标机上的非常驻受限执行器，可以在网页中：
+### MySQL 安装与部署
 
-- 登记主机并自动探测 Linux、CPU、glibc、IPv4、内存、磁盘和端口。
-- 以 16 MiB 分块断点上传最大 2 GiB 的 MySQL 安装包，并校验 SHA-256。
-- 部署单机、主库、从库、一主一从和固定三节点 MGR。
-- 将部署向导中的拓扑、端口、网络和安装介质配置导出为不含明文密码的目标机 Bash 脚本，支持预览、复制和下载。
-- 查看实时任务日志，管理实例启停、重新初始化和卸载。
-- 使用本地 RBAC、SSH 指纹固定、AES-256-GCM 密码保险箱和审计日志。
-- 创建手动或 Cron 定时在线备份，备份文件通过 SFTP 下载到控制台持久化备份目录，并校验 SHA-256。
-- 按实例采集主机 CPU、内存、磁盘、负载和 MySQL 连接数、查询量、慢查询、流量、连接异常及复制状态。
+- 支持 MySQL 5.6、5.7、8.0 和 8.4 官方 Generic Binary 安装包。
+- 支持单机、独立主库、独立从库、一主一从和三节点单主 MGR。
+- 支持 MGR 完成后接管为 InnoDB Cluster，并在三个节点部署 MySQL Router。
+- 自动识别 Linux 发行版、CPU 架构、glibc、内存、磁盘和可用 IP。
+- 支持目标机在线下载，也可上传 `.tar.xz`、`.tar.gz`、`.tgz` 或 `.tar` 安装介质。
+- 上传文件采用 16 MiB 分片、断点续传和 SHA-256 校验，最大默认 2 GiB。
+- 部署前统一检查主机状态、端口、架构、glibc、安装包和节点网络，MGR 按节点顺序执行。
+- 高负载主机支持延长启动等待和安全续跑；失败部署可预览并清理残留。
 
-备份和健康监控使用协议版本 1 的新版 `aim-executor`。升级控制台后，请在每台纳管主机重新运行新版 host kit（不会删除 MySQL 数据），否则旧执行器只认识安装/启停动作，页面上的备份和监控会提示“不支持的 action”。
+### 实例与拓扑管理
 
-快速启动控制台：
+- 管理实例启动、停止、状态检查、重新初始化和卸载。
+- MySQL 实例按真实部署关系分组，主从、MGR 和独立实例不会混排。
+- 拓扑页展示主库到从库的复制方向、MGR 成员、SQL/MGR 端点、在线状态和 Router 入口。
+- 创建独立从库时可直接选择已有受管主库，自动带入源库地址和端口并建立拓扑关系。
+- 部署向导可生成不含明文密码的 Bash 脚本，供审核、复制或在目标机独立执行。
 
-```bash
-git clone --branch aim --single-branch https://github.com/aimdotsh/aim.git
-cd aim
-cp .env.sample .env
-mkdir -p secrets
-openssl rand -base64 32 > secrets/aim_master_key
-chmod 600 secrets/aim_master_key
-# 先修改 .env 中的初始管理员密码
-docker compose up -d --build
-```
+### 在线备份
 
-默认访问 `https://<控制台IP>:8443`。Caddy 默认使用内部 CA，客户端需信任该 CA，或替换为企业内网证书。完整的控制台、目标机初始化及安全说明见 [Web 控制台部署指南](docs/web-console.md)。
-
-本机访问默认使用 `https://localhost:8443`。从其他电脑通过内网 IP 访问前，需要把该 IP 加入 `.env` 的 `AIM_TLS_HOSTS` 并重新创建 Caddy 容器。
-
-Web 控制台是可选功能；只使用命令行时仍然只需下载一个 `aim.sh`。
-
-## 从 Web 配置导出目标机脚本
-
-“部署向导”底部的“生成执行脚本”会把当前配置转换为 Host Kit 可执行的 Bash 包装脚本。生成文件不会包含页面中填写的 root、复制、MGR 恢复或集群管理密码；运行时会在目标机终端静默询问，也可由自动化系统通过对应的 `AIM_*_PASSWORD` 环境变量提供。
-
-脚本能力与组件边界如下：
-
-- `aim.sh`：单机、主库、从库、一主一从和三节点 MGR 安装，以及启动、停止、状态检查、重新初始化和卸载。
-- `router.sh`：MGR 完成后的 InnoDB Cluster 接管和 MySQL Router 部署。导出的 MGR+Router 脚本提供独立的 `install`、`router` 两个阶段。
-- `aim-executor` 与 Web 控制台：在线备份、Cron 调度、备份保留、持久化归档、监控历史、SSH 指纹、权限和审计。这些能力不会被导出为一次性脚本。
-
-目标机需先安装 Host Kit 2.4.14。单节点示例：
-
-```bash
-chmod 700 aim-production-mysql.sh
-sudo bash ./aim-production-mysql.sh install
-```
-
-多节点使用同一份脚本，脚本根据页面填写的业务网 IP 自动判断当前节点；无法自动识别时可显式指定：
-
-```bash
-sudo AIM_NODE_INDEX=2 bash ./aim-primary-mgr.sh install
-```
-
-MGR+Router 必须先按节点 1、2、3 顺序完成 `install`，确认三节点均为 `ONLINE` 后，再按节点 1、2、3 顺序执行 `router`。如果页面选择了上传介质，还需把对应 MySQL 压缩包复制到目标机，脚本会先校验页面记录的 SHA-256；也可以通过 `AIM_ARCHIVE_PATH` 指定文件位置。
-
-## 在线备份与健康监控
-
-安装完成的实例会出现在“备份中心”和“健康监控”页面。备份使用目标机上的受限 `aim-executor` 调用对应版本的 `mysqldump`，采用 `--single-transaction`、`--quick`、`--routines`、`--events` 和 `--triggers`，在目标机临时目录中流式生成 gzip 文件，控制台下载后再次计算 SHA-256 并写入持久化备份目录：
+- 支持手动备份和五段 Cron 定时计划。
+- 支持全库或指定数据库逻辑备份。
+- 使用目标实例对应版本的 `mysqldump`，启用一致性读取、快速流式导出、存储过程、事件和触发器。
+- 远端生成 gzip，控制台通过 SFTP 下载并再次校验 SHA-256。
+- 支持按保留天数和保留份数自动清理。
+- 默认保存到：
 
 ```text
 /var/lib/aim-console/backups/<用户名>/<计划名>/<年>/<月>/
 ```
 
-备份计划支持五段 Cron 表达式、全部数据库或指定数据库、保留天数和保留份数。删除计划不会立即删除历史备份；历史文件按照保留策略清理。目标主机不需要开放新的 HTTP 端口，控制台只使用已经固定指纹的 `aimops` SSH 连接。
+### 健康监控
 
-健康监控按需采集，不在目标主机安装常驻 Agent。每次采集包含主机 CPU、Load Average、内存、Swap、磁盘可用空间，以及 MySQL Uptime、当前/运行中连接、最大连接数、累计连接、Queries、Questions、慢查询、收发字节、打开表、异常连接、InnoDB 缓冲池页和复制 IO/SQL 状态。采样结果保存在控制台 SQLite 中，最多保留每个实例最近 240 条记录。
+- 主机：CPU、Load Average、内存、Swap 和磁盘可用空间。
+- MySQL：运行时间、当前连接、运行中连接、最大连接、累计连接、Queries、Questions 和慢查询。
+- 运行指标：收发流量、打开表、异常连接、InnoDB 缓冲池和表锁等待。
+- 复制状态：复制 IO、复制 SQL 和复制延迟。
+- 不在目标机安装常驻监控 Agent；按需通过受限执行器采集，单实例保存最近 240 条样本。
 
-新版 host kit 初始化时会把每个任务暂存目录交给 `aimops`（目录 `0750`，备份文件 `0600`），这样控制台可以通过 SFTP 取走备份，root 密码文件仍只由 root 执行器读取。已有主机重新安装执行器即可自动补齐该权限配置。
+### 安全与审计
 
-InnoDB 备份是一致性逻辑备份；MyISAM 等非事务表无法保证所有表处于完全相同的时间点。正式环境建议使用专用只读备份账号；当前 AIM 自动部署的 root 凭据经过 AES-256-GCM 加密保存并仅在受限执行器运行期间解密使用。
+- 本地账号登录，支持 `admin`、`operator` 和 `viewer` 三种角色。
+- SSH 主机指纹固定，防止目标主机被静默替换。
+- SSH 私钥和 MySQL 密码使用 AES-256-GCM 加密后保存到 SQLite。
+- 控制台主密钥通过 Docker Secret 单独挂载，不写入数据库。
+- 目标机使用专用 `aimops` 用户和最小化 sudo 规则，只能运行 root 持有的受限执行器。
+- 密码通过环境变量或标准输入传递，不进入远程命令行和任务日志。
+- 部署、备份、实例操作、密码查看和用户管理均记录审计事件。
+- 重新初始化、卸载和失败清理必须先预览并二次确认。
 
-## 支持范围
+## 系统架构
 
-| MySQL | x86_64 | i686 | ARM64 | 初始化方式 | 复制命令 |
-|---|---:|---:|---:|---|---|
-| 5.6.x | 是 | 否 | 否 | `mysql_install_db` | `CHANGE MASTER` / `START SLAVE` |
-| 5.7.x | 是 | 否 | 否 | 5.7.6 前使用 `mysql_install_db`，之后使用 `mysqld --initialize-insecure` | `CHANGE MASTER` / `START SLAVE` |
-| 8.0.x | 是 | 是 | 是 | `mysqld --initialize-insecure` | 8.0.23 起使用 `CHANGE REPLICATION SOURCE` |
-| 8.4.x | 是 | 是（以官网实际发布为准） | 是 | `mysqld --initialize-insecure` | `CHANGE REPLICATION SOURCE` / `START REPLICA` |
+```text
+浏览器
+  |
+  v
+Caddy HTTPS
+  |
+  v
+aim-console (Go + Vue 3)
+  |-- SQLite：配置、拓扑、任务、监控样本和审计
+  |-- 持久化目录：安装介质与备份文件
+  |
+  +-- SSH/SFTP --> aimops --> sudo aim-executor
+                                      |-- aim.sh
+                                      +-- router.sh
+```
 
-操作系统支持 RHEL/CentOS/Rocky/AlmaLinux/Oracle Linux、Debian/Ubuntu、SLES/openSUSE 等 glibc Linux。脚本自动识别 `dnf`、`yum`、`apt` 或 `zypper`，并识别 x86_64、i686 和 aarch64。Alpine 等 musl 系统不能直接运行 Oracle 通用二进制包，因此会在安装前明确退出。
+控制台不要求目标主机开放额外的 HTTP 端口。日常管理通过 SSH 完成；MySQL、MGR 和 Router 端口是否开放，应根据实际业务网络和集群通信需求配置。
 
-在启用 SELinux 的 RHEL 系统上，脚本会为自定义数据、日志、临时目录和非默认 TCP 端口配置持久上下文；缺少管理工具时会安装发行版对应的 policycoreutils 包或给出明确错误。
+## 快速部署 Web 控制台
 
-MySQL 5.6/5.7 已停止官方维护。脚本仍支持安装归档版本，但生产环境应优先选择仍受支持的 8.0/8.4，并自行承担旧版本安全和系统动态库兼容风险。
+### 1. 准备环境
 
-## 获取脚本
+控制台主机需要：
 
-在线安装只需要下载 `aim.sh`，默认参数已经内置，不依赖仓库中的其他文件：
+- Docker Engine 24 或更高版本。
+- Docker Compose v2。
+- 能够通过 SSH 访问待纳管的 MySQL 主机。
+- 建议至少 2 CPU、2 GiB 内存和足够的备份存储空间。
+
+### 2. 获取代码
 
 ```bash
-wget -O aim.sh \
-  https://raw.githubusercontent.com/aimdotsh/aim/master/aim.sh
+git clone --branch aim --single-branch https://github.com/aimdotsh/aim.git
+cd aim
+```
+
+### 3. 创建配置和加密主密钥
+
+```bash
+cp .env.sample .env
+mkdir -p secrets
+openssl rand -base64 32 > secrets/aim_master_key
+chmod 600 secrets/aim_master_key
+```
+
+编辑 `.env`，至少修改管理员密码和访问地址：
+
+```dotenv
+AIM_ADMIN_USER=admin
+AIM_ADMIN_PASSWORD=请替换为至少12位的高强度密码
+AIM_HTTPS_PORT=8443
+AIM_TLS_HOSTS=localhost, 127.0.0.1, 192.168.31.10
+AIM_MAX_UPLOAD_BYTES=2147483648
+TZ=Asia/Shanghai
+```
+
+注意：
+
+- `AIM_TLS_HOSTS` 必须包含浏览器实际访问使用的主机名或 IP，多个值用英文逗号分隔。
+- 初始管理员只会在空数据库第一次启动时创建。以后修改 `.env` 不会重置已有密码。
+- `secrets/aim_master_key` 丢失后，数据库中已加密的 SSH 私钥和 MySQL 密码将无法恢复，必须单独备份。
+
+### 4. 启动服务
+
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose logs -f console
+```
+
+浏览器访问：
+
+```text
+https://<控制台主机名或IP>:8443
+```
+
+Caddy 默认签发内部 CA 证书。首次访问出现证书提示属于预期行为；生产环境建议让客户端信任 Caddy 根证书，或替换为企业证书。
+
+停止和升级：
+
+```bash
+# 停止，但保留数据库、安装介质和备份
+docker compose down
+
+# 获取 aim 分支更新并重建
+git pull --ff-only
+docker compose up -d --build
+```
+
+不要使用 `docker compose down -v`，除非确认要删除 `aim-data` 持久卷中的控制台数据。
+
+## 初始化目标主机
+
+控制台通过 Host Kit 为每台目标机安装专用账号、受限执行器、`aim.sh` 和 `router.sh`。
+
+### 1. 下载 Host Kit
+
+登录控制台后，在“主机资源”页面点击“下载 Host Kit 2.4.14”；也可以从仓库下载：
+
+[下载 Host Kit 2.4.14](https://raw.githubusercontent.com/aimdotsh/aim/aim/web/public/downloads/aim-host-kit-2.4.14.tar.gz)
+
+在能够 SSH 登录目标服务器的管理电脑上执行：
+
+```bash
+tar -xzf aim-host-kit-2.4.14.tar.gz
+cd aim-host-kit-2.4.14
+```
+
+### 2. 安装到目标机
+
+SSH 用户能够直接登录 root 时：
+
+```bash
+./aim-copy-id --install root@192.168.1.100
+```
+
+使用普通 sudo 用户、非默认端口或指定登录私钥时：
+
+```bash
+./aim-copy-id --install --port 2222 ubuntu@192.168.1.100
+
+ssh-add ~/.ssh/my-login-key
+./aim-copy-id --install ubuntu@192.168.1.100
+```
+
+这里用于登录目标机的个人 SSH 私钥，只负责完成初始化。`aim-copy-id` 会另外生成控制台专用密钥：
+
+```text
+私钥：~/.ssh/aim/aim_console_ed25519
+公钥：~/.ssh/aim/aim_console_ed25519.pub
+```
+
+如果远端用户不能免交互执行 sudo，可先只上传：
+
+```bash
+./aim-copy-id ubuntu@192.168.1.100
+```
+
+然后按照命令输出，登录目标机并执行一次 `sudo .../install-staged-target.sh`。
+
+### 3. 在控制台添加主机
+
+进入“主机资源 → 添加受管主机”，填写：
+
+- 主机名称：用于控制台识别，例如 `mysql-node-01`。
+- IP 或域名：控制台能够 SSH 访问的地址。
+- SSH 端口：默认 `22`。
+- SSH 用户：Host Kit 默认创建的 `aimops`。
+- 专用 SSH 私钥：导入 `~/.ssh/aim/aim_console_ed25519`，不要导入 `.pub` 公钥。
+
+首次保存后确认服务器 SSH 指纹，再执行主机探测。只有显示 `ONLINE` 的主机才能进入部署流程。
+
+重复运行同版本或新版 Host Kit 是幂等更新，不会删除已经安装的 MySQL 数据。控制台升级后若备份或监控提示执行器不支持相应 action，应在每台目标机重新运行新版 Host Kit。
+
+## 使用部署向导
+
+### 安装介质
+
+在“安装介质”页面可以上传官方 MySQL Generic Binary 包。部署时：
+
+- 有兼容的已上传介质：控制台通过 SFTP 发送到目标机，校验 SHA-256 后安装。
+- 没有兼容介质或选择“目标机官方下载”：目标机根据版本、架构和 glibc 从 Oracle 下载。
+- 使用离线介质时，应确保压缩包内包含 `bin/mysqld`，不要上传 `mysql-test-*` 测试套件。
+
+### 部署模式
+
+| 模式 | 节点 | 用途 |
+|---|---:|---|
+| 单机实例 | 1 | 独立开发、测试或普通数据库 |
+| 仅主库 | 1 | 创建开启 GTID/binlog 的复制源 |
+| 仅从库 | 1 | 为已有受管主库或外部源库增加从库 |
+| 一主一从 | 2 | 同一次任务创建一套新的 GTID 主从 |
+| 三节点 MGR | 3 | MySQL 8.0.23+ 单主模式 Group Replication |
+
+MGR 部署要求三台节点之间的 SQL 端口和 MGR 通信端口双向可达。业务网 IP 必须是主机真实拥有且节点之间可以互访的地址，不能填写仅存在于云平台外部映射中的公网 NAT 地址。
+
+启用 MySQL Router 后会占用四个连续端口：
+
+| 端口 | 用途 |
+|---:|---|
+| `RW` | Classic 读写 |
+| `RW + 1` | Classic 只读 |
+| `RW + 2` | X 协议读写 |
+| `RW + 3` | X 协议只读 |
+
+部署过程和远程输出会实时写入“任务中心”。失败后应先阅读最后一条实际 MySQL 或系统错误，再选择“从失败节点重试”或“清理失败安装”。
+
+## 备份与恢复注意事项
+
+创建备份计划时选择实例、Cron 表达式、数据库范围和保留策略。点击“立即备份”后，控制台会：
+
+1. 通过 SSH 调用目标机的受限执行器。
+2. 在目标机临时目录生成 gzip 逻辑备份。
+3. 通过 SFTP 下载到控制台备份目录。
+4. 重新计算 SHA-256，成功后删除目标机临时文件。
+
+备份是面向 InnoDB 的一致性逻辑备份。MyISAM 等非事务表不能保证处于完全相同的时间点。正式环境必须定期执行恢复演练；“备份任务成功”不等于恢复流程已经验证。
+
+控制台备份至少应包含：
+
+- Docker volume `aim-data`。
+- `secrets/aim_master_key`。
+
+默认备份目录位于 `aim-data` 卷内。如果需要改成独立磁盘，应同时修改 `docker-compose.yml` 中的 `AIM_BACKUP_ROOT`，并为新容器路径增加对应的 bind mount，避免文件随容器删除。
+
+## 独立使用 aim.sh
+
+Web 控制台不是必需组件。只管理单机或需要接入现有自动化系统时，可以直接使用 `aim.sh`。
+
+```bash
+# 方式一：克隆普通版分支
+git clone --branch aim --single-branch https://github.com/aimdotsh/aim.git
+cd aim
 chmod +x aim.sh
-```
 
-同一个 `aim.sh` 也负责卸载，不需要其他脚本：
+# 方式二：只下载脚本
+curl -fLo aim.sh https://raw.githubusercontent.com/aimdotsh/aim/aim/aim.sh
+chmod +x aim.sh
 
-```bash
-sudo ./aim.sh --uninstall -v 8.0.46 -p 8046 --dry-run
-sudo ./aim.sh --uninstall -v 8.0.46 -p 8046 --yes
-```
+# 先检查，不修改系统
+./aim.sh -v 8.4.5 -p 3306 --role standalone --dry-run --skip-deps
 
-部署任务失败且尚未登记为受管实例时，可以在任务中心先预览、再清理失败安装。等价的目标机命令如下；它会删除指定端口的 AIM 数据、日志和服务，并且仅在没有其他 AIM 实例引用该版本时删除 `/opt/mysql/<version>` 软件目录：
-
-```bash
-sudo ./aim.sh --cleanup-failed -v 8.0.46 -p 8046 --dry-run
-sudo AIM_ROOT_PASSWORD='your-password' ./aim.sh --cleanup-failed -v 8.0.46 -p 8046 --yes
-```
-
-配置文件不是必需的。如需固定目录、角色等参数，下载样例并重命名为与脚本同目录的 `aim.conf`，脚本会自动读取：
-
-```bash
-wget -O config.sample \
-  https://raw.githubusercontent.com/aimdotsh/aim/master/config.sample
-cp config.sample aim.conf
-chmod 600 aim.conf
-```
-
-也可以通过 `-c /path/to/custom.conf` 指定其他受信任配置。MySQL 安装包会自动下载到脚本所在目录的 `media/`，也可以提前放入该目录进行离线安装。
-
-## 快速开始
-
-使用精确的三段版本号：
-
-```bash
-# 单机
+# 安装单机实例
 sudo ./aim.sh -v 8.4.5 -p 3306 --role standalone
 
-# 主库：创建只允许 10.0.0.12 使用的复制账号
-sudo ./aim.sh -v 8.0.42 -p 3306 --role source \
-  --replica-host 10.0.0.12 --repl-password 'replace-me'
-
-# 从库：连接刚安装、尚无业务数据的主库
-sudo ./aim.sh -v 8.0.42 -p 3306 --role replica \
-  --source-host 10.0.0.11 --source-port 3306 \
-  --source-user aim_repl --source-password 'replace-me'
+# 查看状态
+sudo ./aim.sh --status -v 8.4.5 -p 3306
 ```
 
-没有传入 root 或普通主从复制密码时，脚本会生成高强度随机密码，只在安装结束时显示。自动化环境建议通过 `AIM_ROOT_PASSWORD`、`AIM_REPL_PASSWORD`、`AIM_SOURCE_PASSWORD`、`AIM_MGR_RECOVERY_PASSWORD` 环境变量从秘密管理系统注入；命令行密码参数可能被本机进程列表或 shell history 看见。优先级为命令行、环境变量、配置文件、内置默认值。MGR 为了重启后能自动恢复，会按 MySQL 机制把恢复账号凭据保存在复制元数据中，因此必须保护数据目录、主机账号和备份。
-
-## 安装包
-
-脚本先检测本机 glibc，再在 `media/` 中查找与版本、glibc 基线和 CPU 架构匹配的官方包，找不到时依次从 MySQL 当前下载区和官方 Archives 下载。对于 MySQL 8.x，本机 glibc 2.28 或更高时优先选择 `glibc2.28` 包，并自动回退到兼容的 `glibc2.17` 包；低于 2.28 时不会误选 2.28 包。
-
-同时支持压缩的 `.tar.xz`、`.tar.gz`/`.tgz` 和未压缩的 `.tar`。例如 glibc 2.28 x86_64 主机会按以下顺序查找：
-
-```text
-mysql-8.0.46-linux-glibc2.28-x86_64.tar.xz
-mysql-8.0.46-linux-glibc2.28-x86_64.tar
-mysql-8.0.46-linux-glibc2.17-x86_64.tar.xz
-mysql-8.0.46-linux-glibc2.17-x86_64.tar
-```
-
-在 glibc 2.17 x86_64 上，如果完整包不可用，还会继续识别：
-
-```text
-mysql-8.0.46-linux-glibc2.17-x86_64-minimal.tar.xz
-mysql-8.0.46-linux-glibc2.17-x86_64-minimal.tar
-```
-
-`mysql-test-*` 是测试套件而不是数据库服务器安装包，AIM 不会把它作为安装介质；显式传入时会在解压前直接拒绝。
-
-离线安装也可以显式指定：
+一主一从示例：
 
 ```bash
-sudo ./aim.sh -v 5.7.44 -p 3307 \
-  --archive /mnt/packages/mysql-5.7.44-linux-glibc2.12-x86_64.tar.gz \
-  --no-download
+# 主库 10.0.0.11
+sudo AIM_REPL_PASSWORD='replace-with-strong-password' \
+  ./aim.sh -v 8.0.46 -p 3306 --role source \
+  --replica-host 10.0.0.12
+
+# 从库 10.0.0.12
+sudo AIM_SOURCE_PASSWORD='replace-with-strong-password' \
+  ./aim.sh -v 8.0.46 -p 3306 --role replica \
+  --source-host 10.0.0.11 --source-port 3306 --source-user aim_repl
 ```
 
-也可以用 `--download-url URL` 指定企业镜像。脚本解压后会调用 `mysqld --version` 校验包内版本，避免装错软件包。
-
-## 目录与服务
-
-默认目录如下，可用同名参数或 `aim.conf` 修改：
-
-```text
-/opt/mysql/<version>       软件目录
-/data/mysql/<port>/data    数据目录
-/data/mysql/<port>/my.cnf  实例配置
-/var/log/mysql/<port>      日志、binlog、relay log
-/var/tmp/mysql/<port>      临时目录
-```
-
-systemd 环境会创建 `aim-mysql-<port>.service` 并立即启用。非 systemd 环境会用 `mysqld_safe` 启动，同时总会在 `/opt/mysql/` 生成 `start-<port>.sh` 和 `stop-<port>.sh`。停止脚本要求先导出密码：
+生命周期操作：
 
 ```bash
-export MYSQL_ROOT_PASSWORD='your-password'
-sudo -E /opt/mysql/stop-3306.sh
+sudo ./aim.sh --start  -v 8.0.46 -p 3306
+sudo ./aim.sh --stop   -v 8.0.46 -p 3306
+sudo ./aim.sh --status -v 8.0.46 -p 3306 --machine-readable --no-print-secrets
+
+# 破坏性操作必须先预览
+sudo ./aim.sh --uninstall -v 8.0.46 -p 3306 --dry-run
+sudo AIM_ROOT_PASSWORD='root-password' \
+  ./aim.sh --uninstall -v 8.0.46 -p 3306 --yes
 ```
 
-卸载前先预览，再明确确认。`--uninstall` 要求显式指定版本和端口，只删除该端口的实例数据和服务，保留同版本可共享的软件目录、`media/` 安装包及 `aim.conf`：
-
-```bash
-sudo ./aim.sh --uninstall -v 8.4.5 -p 3306 --dry-run
-sudo AIM_ROOT_PASSWORD='your-password' ./aim.sh --uninstall -v 8.4.5 -p 3306 --yes
-```
-
-## 配置和检查
-
-查看所有参数：
+查看完整参数：
 
 ```bash
 ./aim.sh --help
 ```
 
-自动化系统可以直接使用实例生命周期接口，并用固定 JSON 结果判断状态：
+密码建议通过 `AIM_ROOT_PASSWORD`、`AIM_REPL_PASSWORD`、`AIM_SOURCE_PASSWORD` 和 `AIM_MGR_RECOVERY_PASSWORD` 等环境变量从秘密管理系统注入。直接把密码放进命令行参数可能被 Shell History 或进程列表记录。
+
+## 支持范围
+
+| 项目 | 支持情况 |
+|---|---|
+| MySQL | 5.6、5.7、8.0、8.4 |
+| CPU | x86_64、i686、aarch64，取决于 Oracle 是否提供对应版本安装包 |
+| Linux | RHEL/CentOS/Rocky/AlmaLinux/Oracle Linux/OpenCloudOS、Debian/Ubuntu、SLES/openSUSE 等 glibc 系统 |
+| 初始化 | MySQL 5.6/早期 5.7 使用 `mysql_install_db`；新版使用 `mysqld --initialize-insecure` |
+| 复制 | GTID 主从；根据版本使用 `CHANGE MASTER` 或 `CHANGE REPLICATION SOURCE` |
+| MGR | MySQL 8.0.23 及以上，固定三节点单主模式 |
+| Router | MGR 完成后使用 MySQL Shell 接管并部署 MySQL Router |
+
+Alpine 等 musl 系统不能直接运行 Oracle Generic Binary。MySQL 5.6 和 5.7 已停止官方维护，生产环境应优先使用仍受支持的 8.0/8.4，并自行评估旧版本安全风险。
+
+## 默认目录
+
+### 控制台容器
+
+```text
+/var/lib/aim-console/aim.db       SQLite 数据库
+/var/lib/aim-console/uploads      上传中的分片
+/var/lib/aim-console/media        MySQL 安装介质
+/var/lib/aim-console/backups      在线备份文件
+```
+
+### 目标 MySQL 主机
+
+```text
+/opt/mysql/<version>              MySQL 软件目录
+/data/mysql/<port>/data           数据目录
+/data/mysql/<port>/my.cnf         实例配置
+/var/log/mysql/<port>             日志、binlog 和 relay log
+/var/tmp/mysql/<port>             临时目录
+/etc/systemd/system/aim-mysql-<port>.service
+```
+
+## 更多文档
+
+- [Web 控制台部署与安全说明](docs/web-console.md)
+- [Host Kit 使用说明](HOST-KIT.md)
+- [Host Kit 详细协议与权限说明](docs/host-kit.md)
+- [配置样例](config.sample)
+
+## 开发与验证
 
 ```bash
-sudo ./aim.sh --status -v 8.0.46 -p 8046 --machine-readable --no-print-secrets
-sudo ./aim.sh --stop   -v 8.0.46 -p 8046 --machine-readable --no-print-secrets
-sudo ./aim.sh --start  -v 8.0.46 -p 8046 --machine-readable --no-print-secrets
+# 前端
+cd web
+npm install
+npm run test
+npm run build
+cd ..
+
+# 后端
+go test ./...
+
+# 构建普通 Linux AMD64 镜像
+docker build --platform linux/amd64 -t aim-mysql-console:local .
 ```
-
-最后一行固定包含 `ok/action/version/role/port/service/state/paths/error_code`，不包含任何密码；失败仍返回非零退出码。`--no-print-secrets` 也可用于安装、重新初始化和卸载。
-
-在目标 Linux 上仅检查版本、端口、系统、架构、下载包选择和将执行的动作：
-
-```bash
-./aim.sh -v 8.4.5 -p 3306 --dry-run --skip-deps
-```
-
-默认配置文件是与脚本同目录的 `aim.conf`，它是受信任的 Bash 配置并会被 `source`。仓库中的 `config.sample` 不会自动加载，复制为 `aim.conf` 后才生效。不要使用来源不明的配置文件。命令行参数优先于配置文件。
-
-配置优先级为：命令行参数 > `AIM_*` 密码环境变量 > 配置文件 > 内置默认值。推荐先执行 `--dry-run`，确认系统识别、安装包名称和目录规划符合预期后再正式安装。
-
-如果旧版 AIM 首次安装时出现 `Failed to set datadir ... errno: 13 - Permission denied`，先清理失败实例并修复默认根目录的穿越权限，再重试：
-
-```bash
-sudo ./aim.sh --uninstall -v 8.0.46 -p 8046 --yes
-sudo chmod 0755 /data /data/mysql /opt/mysql \
-  /var/log/mysql /var/tmp/mysql
-namei -l /data/mysql/8046/data
-sudo ./aim.sh -v 8.0.46 -p 8046
-```
-
-新版 AIM 会以可穿越权限创建缺失的安装根目录，并在初始化前以 `mysql` 用户实际写入数据、日志和临时目录；权限或 SELinux 仍不兼容时，会输出具体目录层级后退出。
-
-需要重新初始化指定端口时，先预览将删除的路径，再显式确认。该操作会永久删除该实例的数据、配置和日志，但保留共享的版本软件目录与 `media/` 安装包：
-
-```bash
-# 只预览，不删除
-sudo ./aim.sh -v 8.0.46 -p 8046 --reinitialize --dry-run
-
-# 自动化确认后重新初始化
-sudo ./aim.sh -v 8.0.46 -p 8046 --reinitialize --yes
-```
-
-不传 `--yes` 时必须在终端输入端口号确认。如果端口、socket 或 PID 表明 mysqld 仍在运行，脚本会拒绝删除；必须先正常停止数据库。
-
-## 主从约束
-
-自动主从流程面向“一主一从均为新建空实例”的场景，默认启用 GTID，不再配置 SSH 免密或远程使用 root。步骤是：
-
-1. 先用 `--role source` 安装主库并创建复制账号。
-2. 再用 `--role replica` 安装从库并连接主库。
-3. 从库安装结束时会输出 `SHOW SLAVE STATUS\G` 或 `SHOW REPLICA STATUS\G`。
-
-如果主库已经包含业务数据，必须先使用经过验证的物理备份、Clone Plugin 或逻辑备份建立一致性基线，再配置复制；本脚本不会冒险自动搬迁已有数据。
-
-## 三节点 MGR
-
-`--role mgr` 面向 MySQL 8.0.23 及以上版本，创建单主模式 Group Replication。每个成员必须显式指定唯一 `--server-id`、本机 XCom 地址、全部种子地址、共同的组 UUID、IP 白名单和共同的恢复密码。`--mgr-port` 默认是 `33061`，不能与 SQL 端口相同。
-
-自动流程只接受由 AIM 新初始化的空实例：脚本在启动 MGR 前检查没有业务表，并清除初始化期间产生的本地 GTID，避免成员带着互不相同的游离事务入组。已有业务数据不能使用该自动流程，必须先建立经过验证的一致性副本。
-
-下面是端口 `8046` 的三节点配置：
-
-| 主机 | 地址 | `server_id` | MGR 动作 |
-|---|---|---:|---|
-| node00 | 172.20.23.90 | 14690 | bootstrap，且仅执行一次 |
-| node01 | 172.20.23.95 | 14695 | join |
-| node02 | 172.20.23.96 | 14696 | join |
-
-先确保三台之间 TCP `8046` 和 `33061` 双向互通，并在三台分别设置秘密。恢复密码必须完全相同；root 密码可以不同：
-
-```bash
-export AIM_ROOT_PASSWORD='replace-with-root-password'
-export AIM_MGR_RECOVERY_PASSWORD='replace-with-one-shared-recovery-password'
-```
-
-以下命令中的 `--reinitialize --yes` 会永久删除端口 `8046` 的现有数据、配置和日志，仅适用于这三台刚安装且确认无业务数据的实例。先在每台机器停止实例，并用 `--dry-run` 预览删除范围：
-
-```bash
-sudo systemctl stop aim-mysql-8046
-sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 14690 \
-  --mgr-local-address 172.20.23.90 \
-  --mgr-seeds '172.20.23.90:33061,172.20.23.95:33061,172.20.23.96:33061' \
-  --mgr-group-name 'b32b3ad1-031b-4c53-bfd4-1ea75424021a' \
-  --mgr-allowlist '172.20.23.0/24' --mgr-bootstrap \
-  --reinitialize --dry-run
-```
-
-确认预览后，严格按下面顺序执行；必须等待前一台输出 `ONLINE` 后再执行下一台。
-
-第一台 `node00 (172.20.23.90)` 负责且仅负责首次 bootstrap：
-
-```bash
-sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 14690 \
-  --mgr-local-address 172.20.23.90 \
-  --mgr-seeds '172.20.23.90:33061,172.20.23.95:33061,172.20.23.96:33061' \
-  --mgr-group-name 'b32b3ad1-031b-4c53-bfd4-1ea75424021a' \
-  --mgr-allowlist '172.20.23.0/24' --mgr-bootstrap \
-  --reinitialize --yes
-```
-
-第二台 `172.20.23.95` 加入组，不能带 `--mgr-bootstrap`：
-
-```bash
-sudo systemctl stop aim-mysql-8046
-sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 14695 \
-  --mgr-local-address 172.20.23.95 \
-  --mgr-seeds '172.20.23.90:33061,172.20.23.95:33061,172.20.23.96:33061' \
-  --mgr-group-name 'b32b3ad1-031b-4c53-bfd4-1ea75424021a' \
-  --mgr-allowlist '172.20.23.0/24' \
-  --reinitialize --yes
-```
-
-第三台 `172.20.23.96` 最后加入，同样不能带 `--mgr-bootstrap`：
-
-```bash
-sudo systemctl stop aim-mysql-8046
-sudo -E ./aim.sh -v 8.0.46 -p 8046 --role mgr --server-id 14696 \
-  --mgr-local-address 172.20.23.96 \
-  --mgr-seeds '172.20.23.90:33061,172.20.23.95:33061,172.20.23.96:33061' \
-  --mgr-group-name 'b32b3ad1-031b-4c53-bfd4-1ea75424021a' \
-  --mgr-allowlist '172.20.23.0/24' \
-  --reinitialize --yes
-```
-
-任意成员上验证状态：
-
-```sql
-SELECT MEMBER_HOST, MEMBER_PORT, MEMBER_STATE, MEMBER_ROLE, MEMBER_VERSION
-FROM performance_schema.replication_group_members
-ORDER BY MEMBER_HOST;
-```
-
-正常结果应有三个 `ONLINE` 成员，只有一个 `PRIMARY`。安装成功后脚本持久化 `group_replication_start_on_boot=ON`；日常重启不能再次使用 `--mgr-bootstrap`。仅在整个组完全丢失且确认没有任何成员仍在线时，才可按 MGR 灾难恢复流程选定唯一成员重新引导，不能同时在多台 bootstrap。
-
-## 设计上的安全改进
-
-- 不覆盖 `/etc/my.cnf`，不同端口实例互不影响。
-- 不修改整个 `/etc/security/limits.conf`，只写独立 drop-in。
-- 安装前检查 root、系统、glibc、架构、端口、目录和包内版本。
-- 配置按 5.6/5.7 与 8.x 分支生成，避免向 8.x 写入已删除参数。
-- 不再把操作系统 SSH 密码或数据库密码写进仓库配置。
-
-仓库只保留当前 2.x 所需内容：统一生命周期脚本 `aim.sh`、可选配置模板 `config.sample`、回归测试和本说明文档。`aim.conf` 是本机配置并已加入 `.gitignore`，避免误提交主机路径或凭据。
