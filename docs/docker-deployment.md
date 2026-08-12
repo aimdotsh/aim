@@ -5,6 +5,7 @@
 - Docker Hub：[f00700f/aim-mysql-console](https://hub.docker.com/r/f00700f/aim-mysql-console)
 - 当前固定版本：`1.0.41`
 - 支持架构：`linux/amd64`
+- 镜像摘要：`sha256:683580f70bbef0748436c9a0b0a93e7035c30944ae276465e625ab53df4a0bd6`
 
 > AIM 控制台容器只负责管理平台本身。MySQL 实例安装在通过 SSH 纳管的目标 Linux 主机上，不会安装到控制台容器中。
 
@@ -185,7 +186,7 @@ f00700f/aim-mysql-console:1.0.41
 对供应链可重复性要求更高时，可在 `.env` 固定摘要：
 
 ```dotenv
-AIM_IMAGE=f00700f/aim-mysql-console@sha256:<从发布说明或 Docker Hub 获取的镜像摘要>
+AIM_IMAGE=f00700f/aim-mysql-console@sha256:683580f70bbef0748436c9a0b0a93e7035c30944ae276465e625ab53df4a0bd6
 ```
 
 然后重新拉取并启动：
