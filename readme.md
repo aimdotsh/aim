@@ -81,6 +81,8 @@ aim-console (Go + Vue 3)
 
 ## 快速部署 Web 控制台
 
+如果不想在服务器上构建源码，可直接使用 Docker Hub 镜像一键启动，参见 [Docker 一键部署手册](docs/docker-deployment.md)。
+
 ### 1. 准备环境
 
 控制台主机需要：
@@ -363,6 +365,7 @@ Alpine 等 musl 系统不能直接运行 Oracle Generic Binary。MySQL 5.6 和 5
 
 ## 更多文档
 
+- [Docker Hub 镜像一键部署](docs/docker-deployment.md)
 - [Web 控制台部署与安全说明](docs/web-console.md)
 - [Host Kit 使用说明](HOST-KIT.md)
 - [Host Kit 详细协议与权限说明](docs/host-kit.md)
