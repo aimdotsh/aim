@@ -15,6 +15,16 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
     chmod 0755 /out/aim-console && rm /out/aim-console.sparse
 
 FROM alpine:3.23
+ARG AIM_VERSION=dev
+ARG VCS_REF=unknown
+ARG BUILD_DATE=unknown
+LABEL org.opencontainers.image.title="aim.sh MySQL Console" \
+      org.opencontainers.image.description="Self-hosted MySQL deployment, backup, monitoring and lifecycle control plane" \
+      org.opencontainers.image.version="${AIM_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.source="https://github.com/aimdotsh/aim" \
+      org.opencontainers.image.licenses="Apache-2.0"
 RUN apk add --no-cache ca-certificates tzdata && \
     addgroup -S -g 10001 aim && adduser -S -D -H -u 10001 -G aim aim && \
     install -d -o aim -g aim -m 0750 /var/lib/aim-console /usr/share/aim

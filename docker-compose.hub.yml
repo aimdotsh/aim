@@ -1,6 +1,6 @@
 services:
   console:
-    image: "${AIM_IMAGE:-f00700f/aim-mysql-console:1.0.40}"
+    image: "${AIM_IMAGE:-f00700f/aim-mysql-console:1.0.41}"
     platform: linux/amd64
     pull_policy: always
     restart: unless-stopped
@@ -11,9 +11,6 @@ services:
       AIM_LISTEN: ":8080"
       AIM_DATA_DIR: "/var/lib/aim-console"
       AIM_BACKUP_ROOT: "/var/lib/aim-console/backups"
-      # Compatibility with the published 1.0.40 image. New standalone images
-      # use AIM_BACKUP_ROOT; setting both keeps upgrades non-disruptive.
-      AIM_DOCUMENT_ROOT: "/var/lib/aim-console/backups"
       AIM_MASTER_KEY_FILE: "/run/secrets/aim_master_key"
       AIM_COOKIE_SECURE: "true"
     secrets:

@@ -3,9 +3,8 @@
 本文使用 Docker Hub 已发布镜像部署 aim.sh MySQL 控制台，不需要安装 Go、Node.js，也不需要在服务器上构建镜像。
 
 - Docker Hub：[f00700f/aim-mysql-console](https://hub.docker.com/r/f00700f/aim-mysql-console)
-- 当前固定版本：`1.0.40`
+- 当前固定版本：`1.0.41`
 - 支持架构：`linux/amd64`
-- 镜像摘要：`sha256:22163dc2a98fb01ab978862049b9fd941df4c37ef1dbf2ae1b92bda66d51e4cf`
 
 > AIM 控制台容器只负责管理平台本身。MySQL 实例安装在通过 SSH 纳管的目标 Linux 主机上，不会安装到控制台容器中。
 
@@ -124,12 +123,11 @@ docker run -d \
   -e AIM_LISTEN=:8080 \
   -e AIM_DATA_DIR=/var/lib/aim-console \
   -e AIM_BACKUP_ROOT=/var/lib/aim-console/backups \
-  -e AIM_DOCUMENT_ROOT=/var/lib/aim-console/backups \
   -e AIM_MASTER_KEY='请替换为随机长字符串' \
   -e AIM_ADMIN_USER=admin \
   -e AIM_ADMIN_PASSWORD='请替换为至少12位的高强度密码' \
   -e AIM_COOKIE_SECURE=false \
-  f00700f/aim-mysql-console:1.0.40
+  f00700f/aim-mysql-console:1.0.41
 ```
 
 访问 `http://127.0.0.1:8080`。如果需要让其他电脑访问，应通过 Nginx、Caddy 或 Traefik 提供 HTTPS，再把 `AIM_COOKIE_SECURE` 改为 `true`。
@@ -178,16 +176,16 @@ docker compose -f docker-compose.hub.yml down
 
 ## 六、固定镜像版本和摘要
 
-生产环境不建议使用 `latest`。默认 Compose 已固定到 `1.0.40`：
+生产环境不建议使用 `latest`。默认 Compose 已固定到 `1.0.41`：
 
 ```text
-f00700f/aim-mysql-console:1.0.40
+f00700f/aim-mysql-console:1.0.41
 ```
 
 对供应链可重复性要求更高时，可在 `.env` 固定摘要：
 
 ```dotenv
-AIM_IMAGE=f00700f/aim-mysql-console@sha256:22163dc2a98fb01ab978862049b9fd941df4c37ef1dbf2ae1b92bda66d51e4cf
+AIM_IMAGE=f00700f/aim-mysql-console@sha256:<从发布说明或 Docker Hub 获取的镜像摘要>
 ```
 
 然后重新拉取并启动：

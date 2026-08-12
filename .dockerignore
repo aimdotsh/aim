@@ -1,6 +1,9 @@
 .git
 .rca
 .DS_Store
+.env
+.env.*
+!.env.sample
 aim.conf
 media
 data
@@ -11,4 +14,7 @@ web/node_modules
 dist
 !internal/webui/dist/
 !internal/webui/dist/**
+internal/webui/dist/downloads/*
+!internal/webui/dist/downloads/aim-host-kit-2.4.14.tar.gz
+web/public/downloads/*
 .l*-cli-*
